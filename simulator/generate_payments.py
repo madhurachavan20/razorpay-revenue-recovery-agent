@@ -53,25 +53,60 @@ PAYMENT_METHOD_WEIGHTS = [
     0.05,
 ]
 
-FAILURE_REASONS = [
-    "TIMEOUT",
-    "BANK_DECLINE",
-    "INSUFFICIENT_FUNDS",
-    "AUTHENTICATION_FAILURE",
-    "NETWORK_ERROR",
-    "CARD_DECLINE",
-    "EXPIRED_PAYMENT_METHOD",
-]
+# Failure patterns vary by payment method.
+# This creates more realistic relationships in the synthetic dataset.
 
-FAILURE_REASON_WEIGHTS = [
-    0.20,
-    0.18,
-    0.20,
-    0.12,
-    0.12,
-    0.10,
-    0.08,
-]
+FAILURE_PATTERNS = {
+    "UPI": {
+        "TIMEOUT": 0.25,
+        "BANK_DECLINE": 0.20,
+        "INSUFFICIENT_FUNDS": 0.18,
+        "NETWORK_ERROR": 0.18,
+        "AUTHENTICATION_FAILURE": 0.10,
+        "CARD_DECLINE": 0.00,
+        "EXPIRED_PAYMENT_METHOD": 0.09,
+    },
+    "CARD": {
+        "TIMEOUT": 0.10,
+        "BANK_DECLINE": 0.15,
+        "INSUFFICIENT_FUNDS": 0.25,
+        "NETWORK_ERROR": 0.08,
+        "AUTHENTICATION_FAILURE": 0.15,
+        "CARD_DECLINE": 0.20,
+        "EXPIRED_PAYMENT_METHOD": 0.07,
+    },
+    "NETBANKING": {
+        "TIMEOUT": 0.18,
+        "BANK_DECLINE": 0.25,
+        "INSUFFICIENT_FUNDS": 0.18,
+        "NETWORK_ERROR": 0.18,
+        "AUTHENTICATION_FAILURE": 0.15,
+        "CARD_DECLINE": 0.00,
+        "EXPIRED_PAYMENT_METHOD": 0.06,
+    },
+    "WALLET": {
+        "TIMEOUT": 0.15,
+        "BANK_DECLINE": 0.15,
+        "INSUFFICIENT_FUNDS": 0.30,
+        "NETWORK_ERROR": 0.20,
+        "AUTHENTICATION_FAILURE": 0.12,
+        "CARD_DECLINE": 0.00,
+        "EXPIRED_PAYMENT_METHOD": 0.08,
+    },
+}
+
+
+# Some failures are more likely to be temporary than others.
+
+FAILURE_CATEGORIES = {
+    "TIMEOUT": "TEMPORARY",
+    "NETWORK_ERROR": "TEMPORARY",
+    "BANK_DECLINE": "TEMPORARY",
+    "INSUFFICIENT_FUNDS": "PERMANENT",
+    "AUTHENTICATION_FAILURE": "PERMANENT",
+    "CARD_DECLINE": "PERMANENT",
+    "EXPIRED_PAYMENT_METHOD": "PERMANENT",
+}
 
 CURRENCIES = ["INR"]
 
@@ -127,16 +162,39 @@ def generate_payment_status() -> str:
     )[0]
 
 
-def generate_failure_reason(status: str) -> str | None:
-    """Generate a failure reason only for failed payments."""
+def generate_failure_reason(
+    status: str,
+    payment_method: str,
+) -> str | None:
+    """
+    Generate a failure reason based on the payment method.
+
+    This creates meaningful relationships between payment method
+    and failure type instead of selecting failures completely at random.
+    """
+
     if status == "SUCCESS":
         return None
 
+    patterns = FAILURE_PATTERNS[payment_method]
+
+    reasons = list(patterns.keys())
+    weights = list(patterns.values())
+
     return random.choices(
-        FAILURE_REASONS,
-        weights=FAILURE_REASON_WEIGHTS,
+        reasons,
+        weights=weights,
         k=1,
     )[0]
+def generate_failure_category(
+    failure_reason: str | None,
+) -> str | None:
+    """Classify a failure as temporary or permanent."""
+
+    if failure_reason is None:
+        return None
+
+    return FAILURE_CATEGORIES[failure_reason]
 
 
 def generate_retry_count(status: str) -> int:
@@ -179,23 +237,32 @@ def generate_transaction(index: int) -> dict:
     status = generate_payment_status()
     timestamp = generate_transaction_timestamp()
 
+    payment_method = random.choices(
+        PAYMENT_METHODS,
+        weights=PAYMENT_METHOD_WEIGHTS,
+        k=1,
+    )[0]
+
+    failure_reason = generate_failure_reason(
+        status,
+        payment_method,
+    )
+
     return {
         "transaction_id": f"TXN_{index:07d}",
         "customer_id": generate_customer_id(),
         "amount": generate_transaction_amount(),
         "currency": random.choice(CURRENCIES),
-        "payment_method": random.choices(
-            PAYMENT_METHODS,
-            weights=PAYMENT_METHOD_WEIGHTS,
-            k=1,
-        )[0],
+        "payment_method": payment_method,
         "timestamp": timestamp,
         "status": status,
-        "failure_reason": generate_failure_reason(status),
+        "failure_reason": failure_reason,
+        "failure_category": generate_failure_category(
+            failure_reason
+        ),
         "retry_count": generate_retry_count(status),
         "subscription_status": generate_subscription_status(),
     }
-
 
 # ---------------------------------------------------------------------------
 # Dataset generation
@@ -291,23 +358,45 @@ def print_summary(dataframe: pd.DataFrame) -> None:
 
     print("\nDataset Summary")
     print("-" * 40)
-    print(f"Total transactions : {total:,}")
-    print(f"Successful         : {successful:,} ({success_rate:.2f}%)")
-    print(f"Failed             : {failed:,} ({failure_rate:.2f}%)")
+    print(f"Total transactions      : {total:,}")
+    print(f"Successful              : {successful:,} ({success_rate:.2f}%)")
+    print(f"Failed                  : {failed:,} ({failure_rate:.2f}%)")
     print(
         f"Total transaction value : "
         f"₹{dataframe['amount'].sum():,.2f}"
     )
 
     print("\nPayment methods")
-    print(dataframe["payment_method"].value_counts())
+    print(
+        dataframe["payment_method"]
+        .value_counts()
+        .to_string()
+    )
+
+    failed_data = dataframe[
+        dataframe["status"] == "FAILED"
+    ]
 
     print("\nFailure reasons")
     print(
-        dataframe.loc[
-            dataframe["status"] == "FAILED",
-            "failure_reason",
-        ].value_counts()
+        failed_data["failure_reason"]
+        .value_counts()
+        .to_string()
+    )
+
+    print("\nFailure categories")
+    print(
+        failed_data["failure_category"]
+        .value_counts()
+        .to_string()
+    )
+
+    print("\nFailure reasons by payment method")
+    print(
+        pd.crosstab(
+            failed_data["payment_method"],
+            failed_data["failure_reason"],
+        ).to_string()
     )
 
 
