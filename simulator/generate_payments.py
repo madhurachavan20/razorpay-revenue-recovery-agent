@@ -35,6 +35,7 @@ random.seed(SEED)
 np.random.seed(SEED)
 
 
+
 # ---------------------------------------------------------------------------
 # Reference values
 # ---------------------------------------------------------------------------
@@ -110,14 +111,52 @@ FAILURE_CATEGORIES = {
 
 CURRENCIES = ["INR"]
 
+# ---------------------------------------------------------------------------
+# Customer profiles
+# ---------------------------------------------------------------------------
 
+NUM_CUSTOMERS = 25_000
+
+
+def generate_customer_profiles() -> dict:
+    """
+    Generate persistent customer-level attributes.
+
+    Each customer receives a profile that remains consistent
+    across multiple transactions.
+    """
+
+    profiles = {}
+
+    for customer_number in range(1, NUM_CUSTOMERS + 1):
+        customer_id = f"CUST_{customer_number:05d}"
+
+        profiles[customer_id] = {
+            "customer_age_days": random.randint(30, 1_500),
+            "subscription_status": random.choices(
+                ["ACTIVE", "INACTIVE", "NOT_SUBSCRIBED"],
+                weights=[0.35, 0.20, 0.45],
+                k=1,
+            )[0],
+            "is_recurring_customer": random.choices(
+                [True, False],
+                weights=[0.35, 0.65],
+                k=1,
+            )[0],
+        }
+
+    return profiles
+CUSTOMER_PROFILES = generate_customer_profiles()
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
 
 def generate_customer_id() -> str:
-    """Generate a synthetic customer identifier."""
-    return f"CUST_{random.randint(1, 25_000):05d}"
+    """Select an existing customer from the generated profiles."""
+
+    return random.choice(
+        list(CUSTOMER_PROFILES.keys())
+    )
 
 
 def generate_transaction_amount() -> float:
@@ -218,13 +257,7 @@ def generate_retry_count(status: str) -> int:
     )[0]
 
 
-def generate_subscription_status() -> str:
-    """Generate a synthetic subscription state."""
-    return random.choices(
-        ["ACTIVE", "INACTIVE", "NOT_SUBSCRIBED"],
-        weights=[0.35, 0.20, 0.45],
-        k=1,
-    )[0]
+
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +269,10 @@ def generate_transaction(index: int) -> dict:
 
     status = generate_payment_status()
     timestamp = generate_transaction_timestamp()
+
+    customer_id = generate_customer_id()
+
+    customer_profile = CUSTOMER_PROFILES[customer_id]
 
     payment_method = random.choices(
         PAYMENT_METHODS,
@@ -250,7 +287,8 @@ def generate_transaction(index: int) -> dict:
 
     return {
         "transaction_id": f"TXN_{index:07d}",
-        "customer_id": generate_customer_id(),
+        "customer_id": customer_id,
+        "customer_age_days": customer_profile["customer_age_days"],
         "amount": generate_transaction_amount(),
         "currency": random.choice(CURRENCIES),
         "payment_method": payment_method,
@@ -261,7 +299,12 @@ def generate_transaction(index: int) -> dict:
             failure_reason
         ),
         "retry_count": generate_retry_count(status),
-        "subscription_status": generate_subscription_status(),
+        "subscription_status": customer_profile[
+            "subscription_status"
+        ],
+        "is_recurring_customer": customer_profile[
+            "is_recurring_customer"
+        ],
     }
 
 # ---------------------------------------------------------------------------
@@ -279,6 +322,46 @@ def generate_dataset(num_transactions: int) -> pd.DataFrame:
     ]
 
     dataframe = pd.DataFrame(transactions)
+        # Sort transactions chronologically so historical features
+    # only use information available before the current transaction.
+    dataframe = dataframe.sort_values(
+        by="timestamp"
+    ).reset_index(drop=True)
+
+    dataframe["previous_successful_payments"] = (
+        dataframe.groupby("customer_id")["status"]
+        .transform(
+            lambda series: series.eq("SUCCESS").cumsum().shift(
+                fill_value=0
+            )
+        )
+    )
+
+    dataframe["previous_failed_payments"] = (
+        dataframe.groupby("customer_id")["status"]
+        .transform(
+            lambda series: series.eq("FAILED").cumsum().shift(
+                fill_value=0
+            )
+        )
+    )
+
+    total_previous_payments = (
+        dataframe["previous_successful_payments"]
+        + dataframe["previous_failed_payments"]
+    )
+
+    dataframe["customer_success_rate"] = np.where(
+        total_previous_payments > 0,
+        dataframe["previous_successful_payments"]
+        / total_previous_payments,
+        0.0,
+    )
+
+    dataframe["customer_success_rate"] = (
+        dataframe["customer_success_rate"]
+        .round(4)
+    )
 
     dataframe["timestamp"] = pd.to_datetime(dataframe["timestamp"])
 
@@ -295,14 +378,20 @@ def validate_dataset(dataframe: pd.DataFrame) -> None:
     required_columns = {
         "transaction_id",
         "customer_id",
+        "customer_age_days",
         "amount",
         "currency",
         "payment_method",
         "timestamp",
         "status",
         "failure_reason",
+        "failure_category",
         "retry_count",
         "subscription_status",
+        "is_recurring_customer",
+        "previous_successful_payments",
+        "previous_failed_payments",
+        "customer_success_rate",
     }
 
     missing_columns = required_columns - set(dataframe.columns)
@@ -343,8 +432,36 @@ def validate_dataset(dataframe: pd.DataFrame) -> None:
             "Successful payments must not have a failure reason."
         )
 
-    print("Dataset validation passed.")
+    # Customer history validation
 
+    if (dataframe["customer_age_days"] <= 0).any():
+        raise ValueError(
+            "Customer age must be positive."
+        )
+
+    if (
+        dataframe["previous_successful_payments"] < 0
+    ).any():
+        raise ValueError(
+            "Previous successful payment count cannot be negative."
+        )
+
+    if (
+        dataframe["previous_failed_payments"] < 0
+    ).any():
+        raise ValueError(
+            "Previous failed payment count cannot be negative."
+        )
+
+    if not dataframe["customer_success_rate"].between(
+        0,
+        1,
+    ).all():
+        raise ValueError(
+            "Customer success rate must be between 0 and 1."
+        )
+
+    print("Dataset validation passed.")
 
 def print_summary(dataframe: pd.DataFrame) -> None:
     """Print useful statistics about the generated dataset."""
