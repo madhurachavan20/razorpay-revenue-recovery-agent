@@ -35,7 +35,6 @@ random.seed(SEED)
 np.random.seed(SEED)
 
 
-
 # ---------------------------------------------------------------------------
 # Reference values
 # ---------------------------------------------------------------------------
@@ -54,8 +53,10 @@ PAYMENT_METHOD_WEIGHTS = [
     0.05,
 ]
 
-# Failure patterns vary by payment method.
-# This creates more realistic relationships in the synthetic dataset.
+
+# ---------------------------------------------------------------------------
+# Failure patterns
+# ---------------------------------------------------------------------------
 
 FAILURE_PATTERNS = {
     "UPI": {
@@ -97,8 +98,6 @@ FAILURE_PATTERNS = {
 }
 
 
-# Some failures are more likely to be temporary than others.
-
 FAILURE_CATEGORIES = {
     "TIMEOUT": "TEMPORARY",
     "NETWORK_ERROR": "TEMPORARY",
@@ -109,7 +108,21 @@ FAILURE_CATEGORIES = {
     "EXPIRED_PAYMENT_METHOD": "PERMANENT",
 }
 
-CURRENCIES = ["INR"]
+
+# ---------------------------------------------------------------------------
+# Recovery outcome configuration
+# ---------------------------------------------------------------------------
+
+RECOVERY_BASE_PROBABILITY = {
+    "TIMEOUT": 0.75,
+    "NETWORK_ERROR": 0.70,
+    "BANK_DECLINE": 0.55,
+    "INSUFFICIENT_FUNDS": 0.45,
+    "AUTHENTICATION_FAILURE": 0.30,
+    "CARD_DECLINE": 0.35,
+    "EXPIRED_PAYMENT_METHOD": 0.15,
+}
+
 
 # ---------------------------------------------------------------------------
 # Customer profiles
@@ -146,7 +159,11 @@ def generate_customer_profiles() -> dict:
         }
 
     return profiles
+
+
 CUSTOMER_PROFILES = generate_customer_profiles()
+
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -154,9 +171,7 @@ CUSTOMER_PROFILES = generate_customer_profiles()
 def generate_customer_id() -> str:
     """Select an existing customer from the generated profiles."""
 
-    return random.choice(
-        list(CUSTOMER_PROFILES.keys())
-    )
+    return random.choice(list(CUSTOMER_PROFILES.keys()))
 
 
 def generate_transaction_amount() -> float:
@@ -166,34 +181,41 @@ def generate_transaction_amount() -> float:
     Most transactions are relatively small, while a smaller
     number of transactions have higher values.
     """
-    amount = np.random.lognormal(mean=7.2, sigma=0.9)
 
-    # Keep values within a reasonable demo range.
-    amount = min(max(amount, 100), 250_000)
+    amount = np.random.lognormal(
+        mean=7.2,
+        sigma=0.9,
+    )
+
+    amount = min(
+        max(amount, 100),
+        250_000,
+    )
 
     return round(float(amount), 2)
 
 
 def generate_transaction_timestamp() -> datetime:
     """Generate a timestamp within the previous 90 days."""
+
     end_time = datetime.now()
     start_time = end_time - timedelta(days=90)
 
     random_seconds = random.randint(
         0,
-        int((end_time - start_time).total_seconds()),
+        int(
+            (end_time - start_time).total_seconds()
+        ),
     )
 
-    return start_time + timedelta(seconds=random_seconds)
+    return start_time + timedelta(
+        seconds=random_seconds
+    )
 
 
 def generate_payment_status() -> str:
-    """
-    Generate payment status.
+    """Generate a realistic payment status."""
 
-    The initial dataset intentionally contains a realistic
-    mixture of successful and failed transactions.
-    """
     return random.choices(
         ["SUCCESS", "FAILED"],
         weights=[0.74, 0.26],
@@ -205,12 +227,7 @@ def generate_failure_reason(
     status: str,
     payment_method: str,
 ) -> str | None:
-    """
-    Generate a failure reason based on the payment method.
-
-    This creates meaningful relationships between payment method
-    and failure type instead of selecting failures completely at random.
-    """
+    """Generate a failure reason based on the payment method."""
 
     if status == "SUCCESS":
         return None
@@ -225,6 +242,8 @@ def generate_failure_reason(
         weights=weights,
         k=1,
     )[0]
+
+
 def generate_failure_category(
     failure_reason: str | None,
 ) -> str | None:
@@ -237,12 +256,8 @@ def generate_failure_category(
 
 
 def generate_retry_count(status: str) -> int:
-    """
-    Generate the number of previous retry attempts.
+    """Generate the number of previous retry attempts."""
 
-    Successful payments generally have fewer retries,
-    while failed payments can have several attempts.
-    """
     if status == "SUCCESS":
         return random.choices(
             [0, 1, 2],
@@ -257,7 +272,69 @@ def generate_retry_count(status: str) -> int:
     )[0]
 
 
+# ---------------------------------------------------------------------------
+# Recovery functions
+# ---------------------------------------------------------------------------
 
+def calculate_recovery_probability(
+    failure_reason: str | None,
+    subscription_status: str,
+    is_recurring_customer: bool,
+    customer_success_rate: float,
+) -> float | None:
+    """
+    Estimate the probability that a failed payment can eventually
+    be recovered.
+
+    Successful payments receive no recovery probability.
+    """
+
+    # Pandas converts None to NaN inside DataFrames.
+    # Both None and NaN should mean that no recovery prediction
+    # is required.
+    if pd.isna(failure_reason):
+        return None
+
+    probability = RECOVERY_BASE_PROBABILITY[failure_reason]
+
+    # Active subscribers are more valuable recovery targets.
+    if subscription_status == "ACTIVE":
+        probability += 0.10
+
+    # Recurring customers have demonstrated payment intent.
+    if is_recurring_customer:
+        probability += 0.08
+
+    # Strong historical payment behavior increases recovery likelihood.
+    if customer_success_rate >= 0.80:
+        probability += 0.10
+    elif customer_success_rate >= 0.60:
+        probability += 0.05
+    elif customer_success_rate < 0.30:
+        probability -= 0.10
+
+    return max(
+        0.05,
+        min(probability, 0.95),
+    )
+
+
+def generate_recovery_outcome(
+    recovery_probability: float | None,
+) -> int | None:
+    """
+    Generate the synthetic recovery outcome.
+
+    1 = recovered
+    0 = not recovered
+    """
+
+    if recovery_probability is None:
+        return None
+
+    return int(
+        random.random() < recovery_probability
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +348,6 @@ def generate_transaction(index: int) -> dict:
     timestamp = generate_transaction_timestamp()
 
     customer_id = generate_customer_id()
-
     customer_profile = CUSTOMER_PROFILES[customer_id]
 
     payment_method = random.choices(
@@ -288,9 +364,11 @@ def generate_transaction(index: int) -> dict:
     return {
         "transaction_id": f"TXN_{index:07d}",
         "customer_id": customer_id,
-        "customer_age_days": customer_profile["customer_age_days"],
+        "customer_age_days": customer_profile[
+            "customer_age_days"
+        ],
         "amount": generate_transaction_amount(),
-        "currency": random.choice(CURRENCIES),
+        "currency": "INR",
         "payment_method": payment_method,
         "timestamp": timestamp,
         "status": status,
@@ -307,32 +385,52 @@ def generate_transaction(index: int) -> dict:
         ],
     }
 
+
 # ---------------------------------------------------------------------------
 # Dataset generation
 # ---------------------------------------------------------------------------
 
-def generate_dataset(num_transactions: int) -> pd.DataFrame:
+def generate_dataset(
+    num_transactions: int,
+) -> pd.DataFrame:
     """Generate a complete synthetic payment dataset."""
 
-    print(f"Generating {num_transactions:,} synthetic transactions...")
+    print(
+        f"Generating {num_transactions:,} "
+        "synthetic transactions..."
+    )
 
     transactions = [
         generate_transaction(index)
-        for index in range(1, num_transactions + 1)
+        for index in range(
+            1,
+            num_transactions + 1,
+        )
     ]
 
     dataframe = pd.DataFrame(transactions)
-        # Sort transactions chronologically so historical features
-    # only use information available before the current transaction.
+
+    dataframe["timestamp"] = pd.to_datetime(
+        dataframe["timestamp"]
+    )
+
+    # Sort chronologically so historical features only use
+    # information available before the current transaction.
     dataframe = dataframe.sort_values(
         by="timestamp"
     ).reset_index(drop=True)
 
+    # -----------------------------------------------------------------------
+    # Customer historical behavior
+    # -----------------------------------------------------------------------
+
     dataframe["previous_successful_payments"] = (
         dataframe.groupby("customer_id")["status"]
         .transform(
-            lambda series: series.eq("SUCCESS").cumsum().shift(
-                fill_value=0
+            lambda series: (
+                series.eq("SUCCESS")
+                .cumsum()
+                .shift(fill_value=0)
             )
         )
     )
@@ -340,8 +438,10 @@ def generate_dataset(num_transactions: int) -> pd.DataFrame:
     dataframe["previous_failed_payments"] = (
         dataframe.groupby("customer_id")["status"]
         .transform(
-            lambda series: series.eq("FAILED").cumsum().shift(
-                fill_value=0
+            lambda series: (
+                series.eq("FAILED")
+                .cumsum()
+                .shift(fill_value=0)
             )
         )
     )
@@ -363,16 +463,52 @@ def generate_dataset(num_transactions: int) -> pd.DataFrame:
         .round(4)
     )
 
-    dataframe["timestamp"] = pd.to_datetime(dataframe["timestamp"])
+    # -----------------------------------------------------------------------
+    # Recovery probability
+    # -----------------------------------------------------------------------
 
-    dataframe = dataframe.sort_values(
-        by="timestamp"
-    ).reset_index(drop=True)
+    dataframe["recovery_probability"] = dataframe.apply(
+        lambda row: calculate_recovery_probability(
+            row["failure_reason"],
+            row["subscription_status"],
+            row["is_recurring_customer"],
+            row["customer_success_rate"],
+        ),
+        axis=1,
+    )
+
+    # -----------------------------------------------------------------------
+    # Recovery outcome
+    # -----------------------------------------------------------------------
+
+    dataframe["recovered"] = dataframe[
+        "recovery_probability"
+    ].apply(
+        generate_recovery_outcome
+    )
+
+    # Explicitly remove recovery labels from successful
+    # transactions.
+    dataframe.loc[
+        dataframe["status"] == "SUCCESS",
+        "recovery_probability",
+    ] = np.nan
+
+    dataframe.loc[
+        dataframe["status"] == "SUCCESS",
+        "recovered",
+    ] = np.nan
 
     return dataframe
 
 
-def validate_dataset(dataframe: pd.DataFrame) -> None:
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def validate_dataset(
+    dataframe: pd.DataFrame,
+) -> None:
     """Perform basic dataset validation."""
 
     required_columns = {
@@ -392,29 +528,41 @@ def validate_dataset(dataframe: pd.DataFrame) -> None:
         "previous_successful_payments",
         "previous_failed_payments",
         "customer_success_rate",
+        "recovery_probability",
+        "recovered",
     }
 
-    missing_columns = required_columns - set(dataframe.columns)
+    missing_columns = (
+        required_columns
+        - set(dataframe.columns)
+    )
 
     if missing_columns:
         raise ValueError(
-            f"Missing required columns: {sorted(missing_columns)}"
+            f"Missing required columns: "
+            f"{sorted(missing_columns)}"
         )
 
     if dataframe["transaction_id"].duplicated().any():
-        raise ValueError("Duplicate transaction IDs detected.")
+        raise ValueError(
+            "Duplicate transaction IDs detected."
+        )
 
     if (dataframe["amount"] <= 0).any():
-        raise ValueError("Transaction amounts must be positive.")
+        raise ValueError(
+            "Transaction amounts must be positive."
+        )
 
     if not dataframe["status"].isin(
         ["SUCCESS", "FAILED"]
     ).all():
-        raise ValueError("Invalid payment status detected.")
+        raise ValueError(
+            "Invalid payment status detected."
+        )
 
     failed_without_reason = dataframe[
         (dataframe["status"] == "FAILED")
-        & (dataframe["failure_reason"].isna())
+        & dataframe["failure_reason"].isna()
     ]
 
     if not failed_without_reason.empty:
@@ -424,7 +572,7 @@ def validate_dataset(dataframe: pd.DataFrame) -> None:
 
     successful_with_reason = dataframe[
         (dataframe["status"] == "SUCCESS")
-        & (dataframe["failure_reason"].notna())
+        & dataframe["failure_reason"].notna()
     ]
 
     if not successful_with_reason.empty:
@@ -432,7 +580,9 @@ def validate_dataset(dataframe: pd.DataFrame) -> None:
             "Successful payments must not have a failure reason."
         )
 
+    # -----------------------------------------------------------------------
     # Customer history validation
+    # -----------------------------------------------------------------------
 
     if (dataframe["customer_age_days"] <= 0).any():
         raise ValueError(
@@ -440,50 +590,139 @@ def validate_dataset(dataframe: pd.DataFrame) -> None:
         )
 
     if (
-        dataframe["previous_successful_payments"] < 0
+        dataframe["previous_successful_payments"]
+        < 0
     ).any():
         raise ValueError(
-            "Previous successful payment count cannot be negative."
+            "Previous successful payment count "
+            "cannot be negative."
         )
 
     if (
-        dataframe["previous_failed_payments"] < 0
+        dataframe["previous_failed_payments"]
+        < 0
     ).any():
         raise ValueError(
-            "Previous failed payment count cannot be negative."
+            "Previous failed payment count "
+            "cannot be negative."
         )
 
-    if not dataframe["customer_success_rate"].between(
-        0,
-        1,
-    ).all():
+    if not dataframe[
+        "customer_success_rate"
+    ].between(0, 1).all():
         raise ValueError(
             "Customer success rate must be between 0 and 1."
         )
 
+    # -----------------------------------------------------------------------
+    # Recovery validation
+    # -----------------------------------------------------------------------
+
+    recovery_probabilities = dataframe[
+        "recovery_probability"
+    ].dropna()
+
+    if not recovery_probabilities.between(
+        0,
+        1,
+    ).all():
+        raise ValueError(
+            "Recovery probability must be between 0 and 1."
+        )
+
+    valid_recovery_values = {0, 1}
+
+    invalid_recovery_values = dataframe[
+        dataframe["recovered"].notna()
+        & ~dataframe["recovered"].isin(
+            valid_recovery_values
+        )
+    ]
+
+    if not invalid_recovery_values.empty:
+        raise ValueError(
+            "Recovery outcome must be either 0 or 1."
+        )
+
+    # Every failed payment must have a recovery probability
+    # and a recovery outcome.
+    failed_without_recovery = dataframe[
+        (dataframe["status"] == "FAILED")
+        & (
+            dataframe["recovery_probability"].isna()
+            | dataframe["recovered"].isna()
+        )
+    ]
+
+    if not failed_without_recovery.empty:
+        raise ValueError(
+            "Failed payments must have recovery labels."
+        )
+
+    # Successful payments must not have recovery probability
+    # or recovery outcomes.
+    successful_with_recovery = dataframe[
+        (dataframe["status"] == "SUCCESS")
+        & (
+            dataframe["recovery_probability"].notna()
+            | dataframe["recovered"].notna()
+        )
+    ]
+
+    if not successful_with_recovery.empty:
+        raise ValueError(
+            "Successful payments must not have recovery labels."
+        )
+
     print("Dataset validation passed.")
 
-def print_summary(dataframe: pd.DataFrame) -> None:
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+
+def print_summary(
+    dataframe: pd.DataFrame,
+) -> None:
     """Print useful statistics about the generated dataset."""
 
     total = len(dataframe)
-    successful = (dataframe["status"] == "SUCCESS").sum()
-    failed = (dataframe["status"] == "FAILED").sum()
+
+    successful = (
+        dataframe["status"] == "SUCCESS"
+    ).sum()
+
+    failed = (
+        dataframe["status"] == "FAILED"
+    ).sum()
 
     success_rate = successful / total * 100
     failure_rate = failed / total * 100
 
     print("\nDataset Summary")
     print("-" * 40)
-    print(f"Total transactions      : {total:,}")
-    print(f"Successful              : {successful:,} ({success_rate:.2f}%)")
-    print(f"Failed                  : {failed:,} ({failure_rate:.2f}%)")
+
+    print(
+        f"Total transactions      : {total:,}"
+    )
+
+    print(
+        f"Successful              : "
+        f"{successful:,} ({success_rate:.2f}%)"
+    )
+
+    print(
+        f"Failed                  : "
+        f"{failed:,} ({failure_rate:.2f}%)"
+    )
+
     print(
         f"Total transaction value : "
         f"₹{dataframe['amount'].sum():,.2f}"
     )
 
     print("\nPayment methods")
+
     print(
         dataframe["payment_method"]
         .value_counts()
@@ -495,6 +734,7 @@ def print_summary(dataframe: pd.DataFrame) -> None:
     ]
 
     print("\nFailure reasons")
+
     print(
         failed_data["failure_reason"]
         .value_counts()
@@ -502,13 +742,38 @@ def print_summary(dataframe: pd.DataFrame) -> None:
     )
 
     print("\nFailure categories")
+
     print(
         failed_data["failure_category"]
         .value_counts()
         .to_string()
     )
 
+    print("\nRecovery outcomes")
+
+    recovery_counts = (
+        failed_data["recovered"]
+        .value_counts()
+    )
+
+    print(
+        f"Recoverable   : "
+        f"{recovery_counts.get(1, 0):,}"
+    )
+
+    print(
+        f"Not recovered : "
+        f"{recovery_counts.get(0, 0):,}"
+    )
+
+    print("\nAverage recovery probability")
+
+    print(
+        f"{failed_data['recovery_probability'].mean():.2%}"
+    )
+
     print("\nFailure reasons by payment method")
+
     print(
         pd.crosstab(
             failed_data["payment_method"],
@@ -517,20 +782,34 @@ def print_summary(dataframe: pd.DataFrame) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main() -> None:
     """Generate, validate, and save the dataset."""
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    dataframe = generate_dataset(NUM_TRANSACTIONS)
+    dataframe = generate_dataset(
+        NUM_TRANSACTIONS
+    )
 
     validate_dataset(dataframe)
 
-    dataframe.to_csv(OUTPUT_FILE, index=False)
+    dataframe.to_csv(
+        OUTPUT_FILE,
+        index=False,
+    )
 
     print_summary(dataframe)
 
-    print(f"\nDataset saved to: {OUTPUT_FILE}")
+    print(
+        f"\nDataset saved to: {OUTPUT_FILE}"
+    )
 
 
 if __name__ == "__main__":
