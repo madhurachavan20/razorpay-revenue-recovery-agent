@@ -464,3 +464,184 @@ def get_recovery_priority_analytics():
     return result.to_dict(
         orient="records"
     )
+
+# ---------------------------------------------------------------------------
+# Dashboard Summary
+# ---------------------------------------------------------------------------
+
+@app.get("/dashboard/summary")
+def get_dashboard_summary():
+    """Return all key metrics required by the dashboard."""
+
+    payments = load_payments()
+    recommendations = load_recommendations()
+
+    # ---------------------------------------------------------------
+    # Payment metrics
+    # ---------------------------------------------------------------
+
+    total_transactions = len(payments)
+
+    successful_payments = int(
+        (
+            payments["status"] == "SUCCESS"
+        ).sum()
+    )
+
+    failed_payments = int(
+        (
+            payments["status"] == "FAILED"
+        ).sum()
+    )
+
+    success_rate = (
+        successful_payments
+        / total_transactions
+        if total_transactions > 0
+        else 0
+    )
+
+    # ---------------------------------------------------------------
+    # Recovery metrics
+    # ---------------------------------------------------------------
+
+    revenue_at_risk = float(
+        recommendations["amount"].sum()
+    )
+
+    expected_recovery = float(
+        recommendations[
+            "expected_recovery_value"
+        ].sum()
+    )
+
+    recovery_rate = (
+        expected_recovery
+        / revenue_at_risk
+        if revenue_at_risk > 0
+        else 0
+    )
+
+    # ---------------------------------------------------------------
+    # Priority distribution
+    # ---------------------------------------------------------------
+
+    priority_distribution = (
+        recommendations["priority"]
+        .value_counts()
+        .to_dict()
+    )
+
+    # ---------------------------------------------------------------
+    # Payment method breakdown
+    # ---------------------------------------------------------------
+
+    payment_method_breakdown = (
+        recommendations
+        .groupby("payment_method")
+        .agg(
+            failed_payments=(
+                "transaction_id",
+                "count",
+            ),
+            revenue_at_risk=(
+                "amount",
+                "sum",
+            ),
+            expected_recovery=(
+                "expected_recovery_value",
+                "sum",
+            ),
+        )
+        .reset_index()
+    )
+
+    payment_method_breakdown = (
+        payment_method_breakdown.round(2)
+        .to_dict(orient="records")
+    )
+
+    # ---------------------------------------------------------------
+    # Failure category breakdown
+    # ---------------------------------------------------------------
+
+    failure_category_breakdown = (
+        recommendations
+        .groupby("failure_category")
+        .agg(
+            failed_payments=(
+                "transaction_id",
+                "count",
+            ),
+            revenue_at_risk=(
+                "amount",
+                "sum",
+            ),
+            expected_recovery=(
+                "expected_recovery_value",
+                "sum",
+            ),
+        )
+        .reset_index()
+    )
+
+    failure_category_breakdown = (
+        failure_category_breakdown.round(2)
+        .to_dict(orient="records")
+    )
+
+    # ---------------------------------------------------------------
+    # Final dashboard response
+    # ---------------------------------------------------------------
+
+    return {
+        "payment_metrics": {
+            "total_transactions": total_transactions,
+            "successful_payments": successful_payments,
+            "failed_payments": failed_payments,
+            "success_rate": round(
+                success_rate,
+                4,
+            ),
+        },
+        "recovery_metrics": {
+            "revenue_at_risk": round(
+                revenue_at_risk,
+                2,
+            ),
+            "expected_recovery": round(
+                expected_recovery,
+                2,
+            ),
+            "recovery_rate": round(
+                recovery_rate,
+                4,
+            ),
+        },
+        "priority_distribution": {
+            "HIGH": int(
+                priority_distribution.get(
+                    "HIGH",
+                    0,
+                )
+            ),
+            "MEDIUM": int(
+                priority_distribution.get(
+                    "MEDIUM",
+                    0,
+                )
+            ),
+            "LOW": int(
+                priority_distribution.get(
+                    "LOW",
+                    0,
+                )
+            ),
+        },
+        "payment_method_breakdown": (
+            payment_method_breakdown
+        ),
+        "failure_category_breakdown": (
+            failure_category_breakdown
+        ),
+    }
