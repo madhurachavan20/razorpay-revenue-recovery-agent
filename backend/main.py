@@ -269,3 +269,198 @@ def get_payment_summary():
             2,
         ),
     }
+
+# ---------------------------------------------------------------------------
+# Analytics - Overview
+# ---------------------------------------------------------------------------
+
+@app.get("/analytics/overview")
+def get_analytics_overview():
+    """Return overall revenue recovery analytics."""
+
+    recommendations = load_recommendations()
+
+    total_failed_payments = len(
+        recommendations
+    )
+
+    total_revenue_at_risk = float(
+        recommendations["amount"].sum()
+    )
+
+    total_expected_recovery = float(
+        recommendations[
+            "expected_recovery_value"
+        ].sum()
+    )
+
+    recovery_rate = (
+        total_expected_recovery
+        / total_revenue_at_risk
+        if total_revenue_at_risk > 0
+        else 0
+    )
+
+    return {
+        "total_failed_payments": (
+            total_failed_payments
+        ),
+        "total_revenue_at_risk": round(
+            total_revenue_at_risk,
+            2,
+        ),
+        "total_expected_recovery": round(
+            total_expected_recovery,
+            2,
+        ),
+        "expected_recovery_rate": round(
+            recovery_rate,
+            4,
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Analytics - Payment Methods
+# ---------------------------------------------------------------------------
+
+@app.get("/analytics/payment-methods")
+def get_payment_method_analytics():
+    """Return recovery analytics by payment method."""
+
+    recommendations = load_recommendations()
+
+    result = (
+        recommendations
+        .groupby("payment_method")
+        .agg(
+            failed_payments=(
+                "transaction_id",
+                "count",
+            ),
+            revenue_at_risk=(
+                "amount",
+                "sum",
+            ),
+            expected_recovery=(
+                "expected_recovery_value",
+                "sum",
+            ),
+            average_recovery_probability=(
+                "recovery_probability",
+                "mean",
+            ),
+        )
+        .reset_index()
+    )
+
+    result["recovery_rate"] = (
+        result["expected_recovery"]
+        / result["revenue_at_risk"]
+    )
+
+    result = result.round(
+        {
+            "revenue_at_risk": 2,
+            "expected_recovery": 2,
+            "average_recovery_probability": 4,
+            "recovery_rate": 4,
+        }
+    )
+
+    return result.to_dict(
+        orient="records"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Analytics - Failure Categories
+# ---------------------------------------------------------------------------
+
+@app.get("/analytics/failure-categories")
+def get_failure_category_analytics():
+    """Return recovery analytics by failure category."""
+
+    recommendations = load_recommendations()
+
+    result = (
+        recommendations
+        .groupby("failure_category")
+        .agg(
+            failed_payments=(
+                "transaction_id",
+                "count",
+            ),
+            revenue_at_risk=(
+                "amount",
+                "sum",
+            ),
+            expected_recovery=(
+                "expected_recovery_value",
+                "sum",
+            ),
+            average_recovery_probability=(
+                "recovery_probability",
+                "mean",
+            ),
+        )
+        .reset_index()
+        .sort_values(
+            "revenue_at_risk",
+            ascending=False,
+        )
+    )
+
+    result = result.round(
+        {
+            "revenue_at_risk": 2,
+            "expected_recovery": 2,
+            "average_recovery_probability": 4,
+        }
+    )
+
+    return result.to_dict(
+        orient="records"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Analytics - Recovery Priorities
+# ---------------------------------------------------------------------------
+
+@app.get("/analytics/recovery-priorities")
+def get_recovery_priority_analytics():
+    """Return recovery analytics by priority."""
+
+    recommendations = load_recommendations()
+
+    result = (
+        recommendations
+        .groupby("priority")
+        .agg(
+            opportunities=(
+                "transaction_id",
+                "count",
+            ),
+            revenue_at_risk=(
+                "amount",
+                "sum",
+            ),
+            expected_recovery=(
+                "expected_recovery_value",
+                "sum",
+            ),
+        )
+        .reset_index()
+    )
+
+    result = result.round(
+        {
+            "revenue_at_risk": 2,
+            "expected_recovery": 2,
+        }
+    )
+
+    return result.to_dict(
+        orient="records"
+    )

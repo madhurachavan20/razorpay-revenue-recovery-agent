@@ -94,7 +94,16 @@ def generate_recommendation(
         "customer_id": transaction[
             "customer_id"
         ],
-        "amount": round(amount, 2),
+        "payment_method": transaction[
+            "payment_method"
+        ],
+        "failure_category": transaction[
+            "failure_category"
+        ],
+        "amount": round(
+            amount,
+            2,
+        ),
         "failure_reason": failure_reason,
         "recovery_probability": round(
             probability,
@@ -107,7 +116,6 @@ def generate_recommendation(
             2,
         ),
     }
-
 
 # ---------------------------------------------------------------------------
 # Main
