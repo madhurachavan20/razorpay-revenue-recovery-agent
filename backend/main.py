@@ -1,647 +1,124 @@
-"""
-FastAPI backend for the Revenue Recovery Agent.
-"""
-
 from pathlib import Path
-
+from typing import Optional
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / 'data'
+RECOMMENDATIONS_FILE = DATA_DIR / 'recovery_recommendations.csv'
+PAYMENTS_FILE = DATA_DIR / 'payments.csv'
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+app = FastAPI(title='RevenueOS - Revenue Recovery Agent', version='1.0.0')
+app.add_middleware(CORSMiddleware, allow_origins=['http://localhost:5173','http://127.0.0.1:5173'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
-DATA_FILE = Path(
-    "data/recovery_recommendations.csv"
-)
+def load_csv(path: Path, label: str):
+    if not path.exists(): raise HTTPException(404, f'{label} not found: {path}')
+    try: return pd.read_csv(path)
+    except Exception as e: raise HTTPException(500, f'Could not read {label}: {e}')
 
-PAYMENTS_FILE = Path(
-    "data/payments.csv"
-)
+def recs():
+    df=load_csv(RECOMMENDATIONS_FILE,'Recovery recommendations')
+    for c in ['amount','expected_recovery_value','recovery_probability']:
+        if c in df: df[c]=pd.to_numeric(df[c],errors='coerce').fillna(0)
+    for c in ['transaction_id','customer_id','payment_method','failure_reason','failure_category','priority','recommended_action']:
+        if c in df: df[c]=df[c].fillna('UNKNOWN').astype(str).str.strip()
+    for c in ['payment_method','failure_reason','failure_category','priority']:
+        if c in df: df[c]=df[c].str.upper()
+    return df
 
+def pays():
+    df=load_csv(PAYMENTS_FILE,'Payments')
+    if 'amount' in df: df['amount']=pd.to_numeric(df['amount'],errors='coerce').fillna(0)
+    for c in ['status','payment_method','failure_reason']:
+        if c in df: df[c]=df[c].fillna('').astype(str).str.strip().str.upper()
+    return df
 
-# ---------------------------------------------------------------------------
-# FastAPI application
-# ---------------------------------------------------------------------------
+def safe_records(df): return df.where(pd.notna(df),'').to_dict(orient='records')
 
-app = FastAPI(
-    title="Revenue Recovery Agent API",
-    description=(
-        "AI-powered API for identifying and prioritizing "
-        "failed payment recovery opportunities."
-    ),
-    version="1.0.0",
-)
+def priorities(df):
+    out={'HIGH':0,'MEDIUM':0,'LOW':0}
+    if 'priority' in df:
+        vc=df['priority'].astype(str).str.upper().value_counts()
+        for k in out: out[k]=int(vc.get(k,0))
+    return out
 
+def breakdown(df, group, money):
+    if group not in df: return []
+    cols={'failed_payments':('transaction_id','count'),'revenue_at_risk':('amount','sum'),'expected_recovery':('expected_recovery_value','sum')}
+    g=df.groupby(group,dropna=False).agg(**cols).reset_index().sort_values('failed_payments',ascending=False)
+    return safe_records(g.round(2))
 
-# ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
+@app.get('/')
+def root(): return {'service':'RevenueOS','status':'online','dashboard':'/dashboard/summary','docs':'/docs'}
+@app.get('/health')
+def health(): return {'status':'healthy','service':'RevenueOS'}
 
-def load_recommendations() -> pd.DataFrame:
-    """Load recovery recommendations."""
+@app.get('/dashboard/summary')
+def dashboard_summary():
+    p=pays(); r=recs(); total=len(p)
+    success=int((p['status']=='SUCCESS').sum()) if 'status' in p else 0
+    failed=int((p['status']=='FAILED').sum()) if 'status' in p else len(r)
+    risk=float(r['amount'].sum()) if 'amount' in r else 0
+    expected=float(r['expected_recovery_value'].sum()) if 'expected_recovery_value' in r else 0
+    top=r.sort_values('expected_recovery_value',ascending=False).head(10) if 'expected_recovery_value' in r else r.head(10)
+    methods=breakdown(r,'payment_method','amount')
+    failures=breakdown(r,'failure_category','amount')
+    reasons=[]
+    if 'failure_reason' in r:
+        x=r.groupby('failure_reason').agg(failed_payments=('transaction_id','count')).reset_index().sort_values('failed_payments',ascending=False)
+        reasons=safe_records(x)
+    return {'status':'success','payment_metrics':{'total_transactions':total,'successful_payments':success,'failed_payments':failed,'success_rate':success/total if total else 0,'failure_rate':failed/total if total else 0,'total_transaction_value':float(p['amount'].sum()) if 'amount' in p else 0},'recovery_metrics':{'total_failed_payments':len(r),'revenue_at_risk':risk,'expected_recovery':expected,'recovery_rate':expected/risk if risk else 0,'average_recovery_probability':float(r['recovery_probability'].mean()) if 'recovery_probability' in r else 0},'priority_distribution':priorities(r),'payment_method_breakdown':methods,'failure_category_breakdown':failures,'failure_reason_breakdown':reasons,'top_opportunities':safe_records(top)}
 
-    if not DATA_FILE.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Recovery recommendations not found.",
-        )
+@app.get('/metrics')
+def metrics():
+    d=dashboard_summary(); return {'total_failed_payments':d['recovery_metrics']['total_failed_payments'],'total_expected_recovery':d['recovery_metrics']['expected_recovery'],'priority_distribution':d['priority_distribution']}
 
-    return pd.read_csv(DATA_FILE)
-
-
-def load_payments() -> pd.DataFrame:
-    """Load payment transactions."""
-
-    if not PAYMENTS_FILE.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Payment dataset not found.",
-        )
-
-    return pd.read_csv(PAYMENTS_FILE)
-
-
-# ---------------------------------------------------------------------------
-# Health endpoint
-# ---------------------------------------------------------------------------
-
-@app.get("/health")
-def health_check():
-    """Check whether the API is running."""
-
-    return {
-        "status": "healthy",
-        "service": "revenue-recovery-agent",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Metrics endpoint
-# ---------------------------------------------------------------------------
-
-@app.get("/metrics")
-def get_metrics():
-    """Return high-level revenue recovery metrics."""
-
-    recommendations = load_recommendations()
-
-    total_failed_payments = len(
-        recommendations
-    )
-
-    total_expected_recovery = float(
-        recommendations[
-            "expected_recovery_value"
-        ].sum()
-    )
-
-    high_priority = int(
-        (
-            recommendations["priority"]
-            == "HIGH"
-        ).sum()
-    )
-
-    medium_priority = int(
-        (
-            recommendations["priority"]
-            == "MEDIUM"
-        ).sum()
-    )
-
-    low_priority = int(
-        (
-            recommendations["priority"]
-            == "LOW"
-        ).sum()
-    )
-
-    return {
-        "total_failed_payments": total_failed_payments,
-        "total_expected_recovery": round(
-            total_expected_recovery,
-            2,
-        ),
-        "priority_distribution": {
-            "HIGH": high_priority,
-            "MEDIUM": medium_priority,
-            "LOW": low_priority,
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# Recovery opportunities
-# ---------------------------------------------------------------------------
-
-@app.get("/recovery-opportunities")
-def get_recovery_opportunities(
-    priority: str | None = None,
-    limit: int = 50,
-):
-    """
-    Return recovery opportunities.
-
-    Optional priority filter:
-        HIGH
-        MEDIUM
-        LOW
-    """
-
-    recommendations = load_recommendations()
-
+@app.get('/recovery-opportunities')
+def recovery_opportunities(priority: Optional[str]=Query(None), limit:int=Query(50,ge=1,le=500)):
+    df=recs(); selected=None
     if priority:
-        priority = priority.upper()
-
-        if priority not in {
-            "HIGH",
-            "MEDIUM",
-            "LOW",
-        }:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Priority must be HIGH, "
-                    "MEDIUM, or LOW."
-                ),
-            )
-
-        recommendations = recommendations[
-            recommendations["priority"]
-            == priority
-        ]
-
-    limit = max(
-        1,
-        min(limit, 500),
-    )
-
-    recommendations = (
-        recommendations
-        .sort_values(
-            "expected_recovery_value",
-            ascending=False,
-        )
-        .head(limit)
-    )
-
-    return recommendations.to_dict(
-        orient="records"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Single recovery opportunity
-# ---------------------------------------------------------------------------
-
-@app.get(
-    "/recovery-opportunities/{transaction_id}"
-)
-def get_recovery_opportunity(
-    transaction_id: str,
-):
-    """Return one recovery opportunity."""
-
-    recommendations = load_recommendations()
-
-    result = recommendations[
-        recommendations["transaction_id"]
-        == transaction_id
-    ]
-
-    if result.empty:
-        raise HTTPException(
-            status_code=404,
-            detail="Transaction not found.",
-        )
-
-    return result.iloc[0].to_dict()
-
-
-# ---------------------------------------------------------------------------
-# Payment statistics
-# ---------------------------------------------------------------------------
-
-@app.get("/payments/summary")
-def get_payment_summary():
-    """Return summary statistics for all payments."""
-
-    payments = load_payments()
-
-    total_transactions = len(
-        payments
-    )
-
-    successful = int(
-        (
-            payments["status"]
-            == "SUCCESS"
-        ).sum()
-    )
-
-    failed = int(
-        (
-            payments["status"]
-            == "FAILED"
-        ).sum()
-    )
-
-    total_value = float(
-        payments["amount"].sum()
-    )
-
-    return {
-        "total_transactions": total_transactions,
-        "successful_payments": successful,
-        "failed_payments": failed,
-        "success_rate": round(
-            successful / total_transactions,
-            4,
-        ),
-        "failure_rate": round(
-            failed / total_transactions,
-            4,
-        ),
-        "total_transaction_value": round(
-            total_value,
-            2,
-        ),
-    }
-
-# ---------------------------------------------------------------------------
-# Analytics - Overview
-# ---------------------------------------------------------------------------
-
-@app.get("/analytics/overview")
-def get_analytics_overview():
-    """Return overall revenue recovery analytics."""
-
-    recommendations = load_recommendations()
-
-    total_failed_payments = len(
-        recommendations
-    )
-
-    total_revenue_at_risk = float(
-        recommendations["amount"].sum()
-    )
-
-    total_expected_recovery = float(
-        recommendations[
-            "expected_recovery_value"
-        ].sum()
-    )
-
-    recovery_rate = (
-        total_expected_recovery
-        / total_revenue_at_risk
-        if total_revenue_at_risk > 0
-        else 0
-    )
-
-    return {
-        "total_failed_payments": (
-            total_failed_payments
-        ),
-        "total_revenue_at_risk": round(
-            total_revenue_at_risk,
-            2,
-        ),
-        "total_expected_recovery": round(
-            total_expected_recovery,
-            2,
-        ),
-        "expected_recovery_rate": round(
-            recovery_rate,
-            4,
-        ),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Analytics - Payment Methods
-# ---------------------------------------------------------------------------
-
-@app.get("/analytics/payment-methods")
-def get_payment_method_analytics():
-    """Return recovery analytics by payment method."""
-
-    recommendations = load_recommendations()
-
-    result = (
-        recommendations
-        .groupby("payment_method")
-        .agg(
-            failed_payments=(
-                "transaction_id",
-                "count",
-            ),
-            revenue_at_risk=(
-                "amount",
-                "sum",
-            ),
-            expected_recovery=(
-                "expected_recovery_value",
-                "sum",
-            ),
-            average_recovery_probability=(
-                "recovery_probability",
-                "mean",
-            ),
-        )
-        .reset_index()
-    )
-
-    result["recovery_rate"] = (
-        result["expected_recovery"]
-        / result["revenue_at_risk"]
-    )
-
-    result = result.round(
-        {
-            "revenue_at_risk": 2,
-            "expected_recovery": 2,
-            "average_recovery_probability": 4,
-            "recovery_rate": 4,
-        }
-    )
-
-    return result.to_dict(
-        orient="records"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Analytics - Failure Categories
-# ---------------------------------------------------------------------------
-
-@app.get("/analytics/failure-categories")
-def get_failure_category_analytics():
-    """Return recovery analytics by failure category."""
-
-    recommendations = load_recommendations()
-
-    result = (
-        recommendations
-        .groupby("failure_category")
-        .agg(
-            failed_payments=(
-                "transaction_id",
-                "count",
-            ),
-            revenue_at_risk=(
-                "amount",
-                "sum",
-            ),
-            expected_recovery=(
-                "expected_recovery_value",
-                "sum",
-            ),
-            average_recovery_probability=(
-                "recovery_probability",
-                "mean",
-            ),
-        )
-        .reset_index()
-        .sort_values(
-            "revenue_at_risk",
-            ascending=False,
-        )
-    )
-
-    result = result.round(
-        {
-            "revenue_at_risk": 2,
-            "expected_recovery": 2,
-            "average_recovery_probability": 4,
-        }
-    )
-
-    return result.to_dict(
-        orient="records"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Analytics - Recovery Priorities
-# ---------------------------------------------------------------------------
-
-@app.get("/analytics/recovery-priorities")
-def get_recovery_priority_analytics():
-    """Return recovery analytics by priority."""
-
-    recommendations = load_recommendations()
-
-    result = (
-        recommendations
-        .groupby("priority")
-        .agg(
-            opportunities=(
-                "transaction_id",
-                "count",
-            ),
-            revenue_at_risk=(
-                "amount",
-                "sum",
-            ),
-            expected_recovery=(
-                "expected_recovery_value",
-                "sum",
-            ),
-        )
-        .reset_index()
-    )
-
-    result = result.round(
-        {
-            "revenue_at_risk": 2,
-            "expected_recovery": 2,
-        }
-    )
-
-    return result.to_dict(
-        orient="records"
-    )
-
-# ---------------------------------------------------------------------------
-# Dashboard Summary
-# ---------------------------------------------------------------------------
-
-@app.get("/dashboard/summary")
-def get_dashboard_summary():
-    """Return all key metrics required by the dashboard."""
-
-    payments = load_payments()
-    recommendations = load_recommendations()
-
-    # ---------------------------------------------------------------
-    # Payment metrics
-    # ---------------------------------------------------------------
-
-    total_transactions = len(payments)
-
-    successful_payments = int(
-        (
-            payments["status"] == "SUCCESS"
-        ).sum()
-    )
-
-    failed_payments = int(
-        (
-            payments["status"] == "FAILED"
-        ).sum()
-    )
-
-    success_rate = (
-        successful_payments
-        / total_transactions
-        if total_transactions > 0
-        else 0
-    )
-
-    # ---------------------------------------------------------------
-    # Recovery metrics
-    # ---------------------------------------------------------------
-
-    revenue_at_risk = float(
-        recommendations["amount"].sum()
-    )
-
-    expected_recovery = float(
-        recommendations[
-            "expected_recovery_value"
-        ].sum()
-    )
-
-    recovery_rate = (
-        expected_recovery
-        / revenue_at_risk
-        if revenue_at_risk > 0
-        else 0
-    )
-
-    # ---------------------------------------------------------------
-    # Priority distribution
-    # ---------------------------------------------------------------
-
-    priority_distribution = (
-        recommendations["priority"]
-        .value_counts()
-        .to_dict()
-    )
-
-    # ---------------------------------------------------------------
-    # Payment method breakdown
-    # ---------------------------------------------------------------
-
-    payment_method_breakdown = (
-        recommendations
-        .groupby("payment_method")
-        .agg(
-            failed_payments=(
-                "transaction_id",
-                "count",
-            ),
-            revenue_at_risk=(
-                "amount",
-                "sum",
-            ),
-            expected_recovery=(
-                "expected_recovery_value",
-                "sum",
-            ),
-        )
-        .reset_index()
-    )
-
-    payment_method_breakdown = (
-        payment_method_breakdown.round(2)
-        .to_dict(orient="records")
-    )
-
-    # ---------------------------------------------------------------
-    # Failure category breakdown
-    # ---------------------------------------------------------------
-
-    failure_category_breakdown = (
-        recommendations
-        .groupby("failure_category")
-        .agg(
-            failed_payments=(
-                "transaction_id",
-                "count",
-            ),
-            revenue_at_risk=(
-                "amount",
-                "sum",
-            ),
-            expected_recovery=(
-                "expected_recovery_value",
-                "sum",
-            ),
-        )
-        .reset_index()
-    )
-
-    failure_category_breakdown = (
-        failure_category_breakdown.round(2)
-        .to_dict(orient="records")
-    )
-
-    # ---------------------------------------------------------------
-    # Final dashboard response
-    # ---------------------------------------------------------------
-
-    return {
-        "payment_metrics": {
-            "total_transactions": total_transactions,
-            "successful_payments": successful_payments,
-            "failed_payments": failed_payments,
-            "success_rate": round(
-                success_rate,
-                4,
-            ),
-        },
-        "recovery_metrics": {
-            "revenue_at_risk": round(
-                revenue_at_risk,
-                2,
-            ),
-            "expected_recovery": round(
-                expected_recovery,
-                2,
-            ),
-            "recovery_rate": round(
-                recovery_rate,
-                4,
-            ),
-        },
-        "priority_distribution": {
-            "HIGH": int(
-                priority_distribution.get(
-                    "HIGH",
-                    0,
-                )
-            ),
-            "MEDIUM": int(
-                priority_distribution.get(
-                    "MEDIUM",
-                    0,
-                )
-            ),
-            "LOW": int(
-                priority_distribution.get(
-                    "LOW",
-                    0,
-                )
-            ),
-        },
-        "payment_method_breakdown": (
-            payment_method_breakdown
-        ),
-        "failure_category_breakdown": (
-            failure_category_breakdown
-        ),
-    }
+        selected=priority.strip().upper()
+        if selected not in {'HIGH','MEDIUM','LOW'}: raise HTTPException(400,'Priority must be HIGH, MEDIUM, or LOW.')
+        df=df[df['priority']==selected]
+    if 'expected_recovery_value' in df: df=df.sort_values('expected_recovery_value',ascending=False)
+    df=df.head(limit)
+    return {'status':'success','count':len(df),'priority':selected,'data':safe_records(df)}
+
+@app.get('/recovery-opportunities/{transaction_id}')
+def recovery_one(transaction_id:str):
+    df=recs(); m=df[df['transaction_id'].astype(str).str.strip()==transaction_id.strip()]
+    if m.empty: raise HTTPException(404,'Transaction not found.')
+    return safe_records(m.head(1))[0]
+
+@app.get('/payments/summary')
+def payment_summary():
+    p=pays(); total=len(p); s=int((p['status']=='SUCCESS').sum()); f=int((p['status']=='FAILED').sum())
+    return {'total_transactions':total,'successful_payments':s,'failed_payments':f,'success_rate':s/total if total else 0,'failure_rate':f/total if total else 0,'total_transaction_value':float(p['amount'].sum()) if 'amount' in p else 0}
+
+@app.get('/payments')
+def payments(status:Optional[str]=Query(None), limit:int=Query(100,ge=1,le=1000)):
+    df=pays()
+    if status:
+        st=status.strip().upper()
+        if st not in {'SUCCESS','FAILED'}: raise HTTPException(400,'Status must be SUCCESS or FAILED.')
+        df=df[df['status']==st]
+    return {'status':'success','count':min(len(df),limit),'data':safe_records(df.head(limit))}
+
+@app.get('/customers')
+def customers(limit:int=Query(100,ge=1,le=1000)):
+    df=recs()
+    if 'customer_id' not in df: return {'status':'success','count':0,'data':[]}
+    g=df.groupby('customer_id').agg(failed_payments=('transaction_id','count'),revenue_at_risk=('amount','sum'),expected_recovery=('expected_recovery_value','sum'),average_recovery_probability=('recovery_probability','mean')).reset_index().sort_values('expected_recovery',ascending=False).head(limit)
+    return {'status':'success','count':len(g),'data':safe_records(g.round(4))}
+
+@app.get('/analytics/overview')
+def analytics_overview():
+    d=dashboard_summary(); return {**d['payment_metrics'], 'revenue_at_risk':d['recovery_metrics']['revenue_at_risk'],'expected_recovery':d['recovery_metrics']['expected_recovery'],'recovery_rate':d['recovery_metrics']['recovery_rate']}
+@app.get('/analytics/payment-methods')
+def analytics_methods(): return dashboard_summary()['payment_method_breakdown']
+@app.get('/analytics/failure-categories')
+def analytics_failures(): return dashboard_summary()['failure_category_breakdown']
+@app.get('/analytics/recovery-priorities')
+def analytics_priorities():
+    d=dashboard_summary(); return [{'priority':k,'opportunities':v} for k,v in d['priority_distribution'].items()]
