@@ -122,3 +122,185 @@ def analytics_failures(): return dashboard_summary()['failure_category_breakdown
 @app.get('/analytics/recovery-priorities')
 def analytics_priorities():
     d=dashboard_summary(); return [{'priority':k,'opportunities':v} for k,v in d['priority_distribution'].items()]
+
+# ---------------------------------------------------------------------------
+# Recovery Action Center
+# ---------------------------------------------------------------------------
+
+RECOVERY_ACTIONS = {
+    "RETRY_PAYMENT": "Retry payment",
+    "CHANGE_PAYMENT_METHOD": "Retry with another payment method",
+    "ADD_FUNDS": "Notify customer to add funds",
+    "CONTACT_CUSTOMER": "Contact customer",
+}
+
+
+@app.post("/recovery/{transaction_id}/execute")
+def execute_recovery(
+    transaction_id: str,
+    action: str = "AUTO",
+):
+    """
+    Simulate execution of a recovery action.
+    """
+
+    recommendations_file = (
+        BASE_DIR / "data" / "recovery_recommendations.csv"
+    )
+
+    if not recommendations_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Recovery recommendations file not found.",
+        )
+
+    recommendations = pd.read_csv(
+        recommendations_file
+    )
+
+    result = recommendations[
+        recommendations["transaction_id"].astype(str)
+        == str(transaction_id)
+    ]
+
+    if result.empty:
+        raise HTTPException(
+            status_code=404,
+            detail="Recovery opportunity not found.",
+        )
+
+    transaction = result.iloc[0]
+
+    recommended_action = str(
+        transaction["recommended_action"]
+    )
+
+    if action == "AUTO":
+        selected_action = recommended_action
+    else:
+        selected_action = action
+
+    probability = float(
+        transaction["recovery_probability"]
+    )
+
+    amount = float(
+        transaction["amount"]
+    )
+
+    expected_recovery = float(
+        transaction["expected_recovery_value"]
+    )
+
+    if probability >= 0.70:
+        result_status = "RECOVERY_SIMULATED_SUCCESS"
+        message = (
+            "Recovery action executed successfully."
+        )
+    else:
+        result_status = "RECOVERY_ATTEMPTED"
+        message = (
+            "Recovery attempt initiated."
+        )
+
+    return {
+        "status": "success",
+        "transaction_id": str(
+            transaction["transaction_id"]
+        ),
+        "customer_id": str(
+            transaction["customer_id"]
+        ),
+        "amount": round(amount, 2),
+        "action": selected_action,
+        "recovery_probability": round(
+            probability,
+            4,
+        ),
+        "expected_recovery_value": round(
+            expected_recovery,
+            2,
+        ),
+        "result": result_status,
+        "message": message,
+    }
+
+
+@app.get("/recovery/{transaction_id}/details")
+def get_recovery_details(transaction_id: str):
+    """
+    Return detailed information for one recovery opportunity.
+    """
+
+    recommendations_file = (
+        BASE_DIR / "data" / "recovery_recommendations.csv"
+    )
+
+    if not recommendations_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Recovery recommendations file not found.",
+        )
+
+    recommendations = pd.read_csv(
+        recommendations_file
+    )
+
+    result = recommendations[
+        recommendations["transaction_id"].astype(str)
+        == str(transaction_id)
+    ]
+
+    if result.empty:
+        raise HTTPException(
+            status_code=404,
+            detail="Recovery opportunity not found.",
+        )
+
+    transaction = result.iloc[0]
+
+    probability = float(
+        transaction["recovery_probability"]
+    )
+
+    amount = float(
+        transaction["amount"]
+    )
+
+    expected_recovery = float(
+        transaction["expected_recovery_value"]
+    )
+
+    return {
+        "status": "success",
+        "transaction_id": str(
+            transaction["transaction_id"]
+        ),
+        "customer_id": str(
+            transaction["customer_id"]
+        ),
+        "payment_method": str(
+            transaction["payment_method"]
+        ),
+        "failure_category": str(
+            transaction["failure_category"]
+        ),
+        "failure_reason": str(
+            transaction["failure_reason"]
+        ),
+        "amount": round(amount, 2),
+        "recovery_probability": round(
+            probability,
+            4,
+        ),
+        "priority": str(
+            transaction["priority"]
+        ),
+        "recommended_action": str(
+            transaction["recommended_action"]
+        ),
+        "expected_recovery_value": round(
+            expected_recovery,
+            2,
+        ),
+    }
