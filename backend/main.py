@@ -136,93 +136,37 @@ RECOVERY_ACTIONS = {
 
 
 @app.post("/recovery/{transaction_id}/execute")
-def execute_recovery(
-    transaction_id: str,
-    action: str = "AUTO",
-):
-    """
-    Simulate execution of a recovery action.
-    """
+def execute_recovery(transaction_id: str):
+    recommendations = recs()
 
-    recommendations_file = (
-        BASE_DIR / "data" / "recovery_recommendations.csv"
-    )
-
-    if not recommendations_file.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Recovery recommendations file not found.",
-        )
-
-    recommendations = pd.read_csv(
-        recommendations_file
-    )
-
-    result = recommendations[
-        recommendations["transaction_id"].astype(str)
-        == str(transaction_id)
+    match = recommendations[
+        recommendations["transaction_id"].astype(str).str.strip()
+        == transaction_id.strip()
     ]
 
-    if result.empty:
+    if match.empty:
         raise HTTPException(
             status_code=404,
-            detail="Recovery opportunity not found.",
+            detail=f"Recovery opportunity not found: {transaction_id}"
         )
 
-    transaction = result.iloc[0]
-
-    recommended_action = str(
-        transaction["recommended_action"]
-    )
-
-    if action == "AUTO":
-        selected_action = recommended_action
-    else:
-        selected_action = action
-
-    probability = float(
-        transaction["recovery_probability"]
-    )
-
-    amount = float(
-        transaction["amount"]
-    )
-
-    expected_recovery = float(
-        transaction["expected_recovery_value"]
-    )
-
-    if probability >= 0.70:
-        result_status = "RECOVERY_SIMULATED_SUCCESS"
-        message = (
-            "Recovery action executed successfully."
-        )
-    else:
-        result_status = "RECOVERY_ATTEMPTED"
-        message = (
-            "Recovery attempt initiated."
-        )
+    row = match.iloc[0]
 
     return {
-        "status": "success",
-        "transaction_id": str(
-            transaction["transaction_id"]
+        "success": True,
+        "transaction_id": str(row.get("transaction_id", transaction_id)),
+        "customer_id": str(row.get("customer_id", "")),
+        "action": str(
+            row.get("recommended_action", "Retry payment")
         ),
-        "customer_id": str(
-            transaction["customer_id"]
+        "amount": float(row.get("amount", 0)),
+        "recovery_probability": float(
+            row.get("recovery_probability", 0)
         ),
-        "amount": round(amount, 2),
-        "action": selected_action,
-        "recovery_probability": round(
-            probability,
-            4,
+        "expected_recovery": float(
+            row.get("expected_recovery_value", 0)
         ),
-        "expected_recovery_value": round(
-            expected_recovery,
-            2,
-        ),
-        "result": result_status,
-        "message": message,
+        "message": "Recovery action executed successfully."
     }
 
 

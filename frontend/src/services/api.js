@@ -82,3 +82,27 @@ export const getPaymentMethodAnalytics = () =>
 
 export const getFailureCategoryAnalytics = () =>
   request("/analytics/failure-categories");
+
+export const getRecoveryDetails = (transactionId) =>
+  request(
+    `/recovery/${encodeURIComponent(transactionId)}/details`
+  );
+
+export const executeRecovery = (transactionId) =>
+  fetch(
+    `${API_BASE_URL}/recovery/${encodeURIComponent(transactionId)}/execute`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }
+  ).then(async (response) => {
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data?.detail || "Recovery execution failed.");
+    }
+
+    return data;
+  });
