@@ -5,9 +5,7 @@ const API_BASE_URL = "https://revenueos-api-hymt.onrender.com";
 ========================================================= */
 
 async function request(path) {
-  const response = await fetch(
-    `${API_BASE_URL}${path}`
-  );
+  const response = await fetch(`${API_BASE_URL}${path}`);
 
   if (!response.ok) {
     let message = `Request failed: ${response.status}`;
@@ -42,10 +40,7 @@ export const getDashboardSummary = () =>
 export const getPaymentSummary = () =>
   request("/payments/summary");
 
-export const getPayments = async (
-  status = "",
-  limit = 100
-) => {
+export const getPayments = async (status = "", limit = 100) => {
   const params = new URLSearchParams({
     limit: String(limit),
   });
@@ -57,16 +52,6 @@ export const getPayments = async (
   const response = await request(
     `/payments?${params.toString()}`
   );
-
-  /*
-   * Supports both:
-   *
-   * { data: [...] }
-   *
-   * and:
-   *
-   * [...]
-   */
 
   return Array.isArray(response)
     ? response
@@ -83,54 +68,25 @@ export const getRecoveryOpportunities = async (
   search = "",
   status = ""
 ) => {
-
   const params = new URLSearchParams({
     limit: String(limit),
   });
 
   if (priority) {
-    params.set(
-      "priority",
-      priority
-    );
+    params.set("priority", priority);
   }
 
   if (search.trim()) {
-    params.set(
-      "search",
-      search.trim()
-    );
+    params.set("search", search.trim());
   }
 
   if (status) {
-    params.set(
-      "status",
-      status
-    );
+    params.set("status", status);
   }
 
   const response = await request(
     `/recovery-opportunities?${params.toString()}`
   );
-
-  /*
-   * IMPORTANT:
-   *
-   * Backend may return either:
-   *
-   * [
-   *   {...},
-   *   {...}
-   * ]
-   *
-   * OR:
-   *
-   * {
-   *   data: [...]
-   * }
-   *
-   * Handle both formats.
-   */
 
   return Array.isArray(response)
     ? response
@@ -141,10 +97,7 @@ export const getRecoveryOpportunities = async (
    CUSTOMERS
 ========================================================= */
 
-export const getCustomers = async (
-  limit = 100
-) => {
-
+export const getCustomers = async (limit = 100) => {
   const response = await request(
     `/customers?limit=${limit}`
   );
@@ -171,9 +124,7 @@ export const getFailureCategoryAnalytics = () =>
    RECOVERY DETAILS
 ========================================================= */
 
-export const getRecoveryDetails = (
-  transactionId
-) =>
+export const getRecoveryDetails = (transactionId) =>
   request(
     `/recovery/${encodeURIComponent(
       transactionId
@@ -184,9 +135,7 @@ export const getRecoveryDetails = (
    EXECUTE RECOVERY
 ========================================================= */
 
-export const executeRecovery = (
-  transactionId
-) =>
+export const executeRecovery = (transactionId) =>
   fetch(
     `${API_BASE_URL}/recovery/${encodeURIComponent(
       transactionId
@@ -198,7 +147,6 @@ export const executeRecovery = (
       },
     }
   ).then(async (response) => {
-
     let data = {};
 
     try {
@@ -209,8 +157,7 @@ export const executeRecovery = (
 
     if (!response.ok) {
       throw new Error(
-        data?.detail ||
-          "Recovery execution failed."
+        data?.detail || "Recovery execution failed."
       );
     }
 
@@ -222,29 +169,22 @@ export const executeRecovery = (
 ========================================================= */
 
 export const getRecoveryHistory = async () => {
-
-  const response =
-    await request(
-      "/recovery-history"
-    );
-
-  /*
-   * Supports both:
-   *
-   * [...]
-   *
-   * and:
-   *
-   * { data: [...] }
-   */
+  const response = await request("/recovery-history");
 
   return Array.isArray(response)
     ? response
     : response?.data || [];
 };
+
+/* =========================================================
+   RESET RECOVERY
+========================================================= */
+
 export const resetRecovery = (transactionId) =>
   fetch(
-    `${API_BASE_URL}/recovery/${encodeURIComponent(transactionId)}/reset`,
+    `${API_BASE_URL}/recovery/${encodeURIComponent(
+      transactionId
+    )}/reset`,
     {
       method: "POST",
       headers: {
@@ -268,7 +208,8 @@ export const resetRecovery = (transactionId) =>
 
     return data;
   });
-  /* =========================================================
+
+/* =========================================================
    AUTHENTICATION
 ========================================================= */
 
@@ -287,7 +228,13 @@ export const login = async (email, password) => {
     }
   );
 
-  const data = await response.json();
+  let data = {};
+
+  try {
+    data = await response.json();
+  } catch {
+    // Ignore invalid JSON
+  }
 
   if (!response.ok) {
     throw new Error(

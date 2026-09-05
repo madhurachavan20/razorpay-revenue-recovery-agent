@@ -1000,11 +1000,14 @@ function DataTable({
 ========================================================= */
 
 export default function App() {
-  const [loggedIn, setLoggedIn] = useState(false);
+ const [loggedIn, setLoggedIn] = useState(() => {
+  return Boolean(localStorage.getItem("revenueos_token"));
+});
 
-const handleLogin = () => {
+const handleLogin = (user) => {
   setLoggedIn(true);
 };
+
 
 const handleLogout = () => {
   localStorage.removeItem("revenueos_token");
