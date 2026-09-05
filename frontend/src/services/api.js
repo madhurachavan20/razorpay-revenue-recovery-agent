@@ -1,7 +1,13 @@
 const API_BASE_URL = "http://127.0.0.1:8000";
 
+/* =========================================================
+   GENERIC REQUEST
+========================================================= */
+
 async function request(path) {
-  const response = await fetch(`${API_BASE_URL}${path}`);
+  const response = await fetch(
+    `${API_BASE_URL}${path}`
+  );
 
   if (!response.ok) {
     let message = `Request failed: ${response.status}`;
@@ -22,30 +28,19 @@ async function request(path) {
   return response.json();
 }
 
+/* =========================================================
+   DASHBOARD
+========================================================= */
+
 export const getDashboardSummary = () =>
   request("/dashboard/summary");
 
+/* =========================================================
+   PAYMENTS
+========================================================= */
+
 export const getPaymentSummary = () =>
   request("/payments/summary");
-
-export const getRecoveryOpportunities = async (
-  priority = "",
-  limit = 50
-) => {
-  const params = new URLSearchParams({
-    limit: String(limit),
-  });
-
-  if (priority) {
-    params.set("priority", priority);
-  }
-
-  const response = await request(
-    `/recovery-opportunities?${params.toString()}`
-  );
-
-  return response.data || [];
-};
 
 export const getPayments = async (
   status = "",
@@ -63,16 +58,105 @@ export const getPayments = async (
     `/payments?${params.toString()}`
   );
 
-  return response.data || [];
+  /*
+   * Supports both:
+   *
+   * { data: [...] }
+   *
+   * and:
+   *
+   * [...]
+   */
+
+  return Array.isArray(response)
+    ? response
+    : response?.data || [];
 };
 
-export const getCustomers = async (limit = 100) => {
+/* =========================================================
+   RECOVERY OPPORTUNITIES
+========================================================= */
+
+export const getRecoveryOpportunities = async (
+  priority = "",
+  limit = 50,
+  search = "",
+  status = ""
+) => {
+
+  const params = new URLSearchParams({
+    limit: String(limit),
+  });
+
+  if (priority) {
+    params.set(
+      "priority",
+      priority
+    );
+  }
+
+  if (search.trim()) {
+    params.set(
+      "search",
+      search.trim()
+    );
+  }
+
+  if (status) {
+    params.set(
+      "status",
+      status
+    );
+  }
+
+  const response = await request(
+    `/recovery-opportunities?${params.toString()}`
+  );
+
+  /*
+   * IMPORTANT:
+   *
+   * Backend may return either:
+   *
+   * [
+   *   {...},
+   *   {...}
+   * ]
+   *
+   * OR:
+   *
+   * {
+   *   data: [...]
+   * }
+   *
+   * Handle both formats.
+   */
+
+  return Array.isArray(response)
+    ? response
+    : response?.data || [];
+};
+
+/* =========================================================
+   CUSTOMERS
+========================================================= */
+
+export const getCustomers = async (
+  limit = 100
+) => {
+
   const response = await request(
     `/customers?limit=${limit}`
   );
 
-  return response.data || [];
+  return Array.isArray(response)
+    ? response
+    : response?.data || [];
 };
+
+/* =========================================================
+   ANALYTICS
+========================================================= */
 
 export const getAnalyticsOverview = () =>
   request("/analytics/overview");
@@ -83,14 +167,30 @@ export const getPaymentMethodAnalytics = () =>
 export const getFailureCategoryAnalytics = () =>
   request("/analytics/failure-categories");
 
-export const getRecoveryDetails = (transactionId) =>
+/* =========================================================
+   RECOVERY DETAILS
+========================================================= */
+
+export const getRecoveryDetails = (
+  transactionId
+) =>
   request(
-    `/recovery/${encodeURIComponent(transactionId)}/details`
+    `/recovery/${encodeURIComponent(
+      transactionId
+    )}/details`
   );
 
-export const executeRecovery = (transactionId) =>
+/* =========================================================
+   EXECUTE RECOVERY
+========================================================= */
+
+export const executeRecovery = (
+  transactionId
+) =>
   fetch(
-    `${API_BASE_URL}/recovery/${encodeURIComponent(transactionId)}/execute`,
+    `${API_BASE_URL}/recovery/${encodeURIComponent(
+      transactionId
+    )}/execute`,
     {
       method: "POST",
       headers: {
@@ -98,11 +198,102 @@ export const executeRecovery = (transactionId) =>
       },
     }
   ).then(async (response) => {
-    const data = await response.json();
+
+    let data = {};
+
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
 
     if (!response.ok) {
-      throw new Error(data?.detail || "Recovery execution failed.");
+      throw new Error(
+        data?.detail ||
+          "Recovery execution failed."
+      );
     }
 
     return data;
   });
+
+/* =========================================================
+   RECOVERY HISTORY
+========================================================= */
+
+export const getRecoveryHistory = async () => {
+
+  const response =
+    await request(
+      "/recovery-history"
+    );
+
+  /*
+   * Supports both:
+   *
+   * [...]
+   *
+   * and:
+   *
+   * { data: [...] }
+   */
+
+  return Array.isArray(response)
+    ? response
+    : response?.data || [];
+};
+export const resetRecovery = (transactionId) =>
+  fetch(
+    `${API_BASE_URL}/recovery/${encodeURIComponent(transactionId)}/reset`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }
+  ).then(async (response) => {
+    let data = {};
+
+    try {
+      data = await response.json();
+    } catch {
+      // Ignore invalid JSON
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        data?.detail || "Failed to reset recovery."
+      );
+    }
+
+    return data;
+  });
+  /* =========================================================
+   AUTHENTICATION
+========================================================= */
+
+export const login = async (email, password) => {
+  const response = await fetch(
+    `${API_BASE_URL}/auth/login`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email,
+        password,
+      }),
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data?.detail || "Login failed."
+    );
+  }
+
+  return data;
+};

@@ -5,6 +5,8 @@ import {
   useState,
 } from "react";
 
+import "./App.css";
+import Login from "./Login";
 import {
   getDashboardSummary,
   getRecoveryOpportunities,
@@ -15,9 +17,9 @@ import {
   getFailureCategoryAnalytics,
   getRecoveryDetails,
   executeRecovery,
+  getRecoveryHistory,
+  resetRecovery,
 } from "./services/api";
-
-import "./App.css";
 
 const P = ["HIGH", "MEDIUM", "LOW"];
 
@@ -115,29 +117,26 @@ function normalize(x) {
   };
 }
 
-function Header({
-  eyebrow,
-  title,
-  tag,
-}) {
+/* =========================================================
+   HEADER
+========================================================= */
+
+function Header({ eyebrow, title, tag }) {
   return (
     <div className="cardHead">
       <div>
-        <div className="eyebrow">
-          {eyebrow}
-        </div>
-
+        <div className="eyebrow">{eyebrow}</div>
         <h2>{title}</h2>
       </div>
 
-      {tag && (
-        <span className="tag">
-          {tag}
-        </span>
-      )}
+      {tag && <span className="tag">{tag}</span>}
     </div>
   );
 }
+
+/* =========================================================
+   METRIC
+========================================================= */
 
 function Metric({
   icon,
@@ -148,22 +147,22 @@ function Metric({
 }) {
   return (
     <div className="metric">
-      <div
-        className={`metricIcon ${tone}`}
-      >
+      <div className={`metricIcon ${tone}`}>
         {icon}
       </div>
 
       <div>
         <span>{title}</span>
-
         <strong>{value}</strong>
-
         <small>{sub}</small>
       </div>
     </div>
   );
 }
+
+/* =========================================================
+   BADGE
+========================================================= */
 
 function Badge({ p }) {
   return (
@@ -176,6 +175,10 @@ function Badge({ p }) {
     </span>
   );
 }
+
+/* =========================================================
+   BARS
+========================================================= */
 
 function Bars({
   items,
@@ -199,66 +202,49 @@ function Bars({
 
   return (
     <div className="bars">
-      {items
-        .slice(0, 7)
-        .map((x, i) => (
-          <div
-            className="barItem"
-            key={`${String(x[name])}-${i}`}
-          >
-            <div className="barLabel">
-              <b>{nice(x[name])}</b>
-              <span>
-                {num(x[count])}
-              </span>
-            </div>
-
-            <div className="track">
-              <div
-                className="fill"
-                style={{
-                  width: `${
-                    (n(x[count]) / max) *
-                    100
-                  }%`,
-                }}
-              />
-            </div>
-
-            <div className="barMeta">
-              <span>{moneyLabel}</span>
-              <b>
-                {money(x[moneyKey])}
-              </b>
-            </div>
+      {items.slice(0, 7).map((x, i) => (
+        <div
+          className="barItem"
+          key={`${String(x[name])}-${i}`}
+        >
+          <div className="barLabel">
+            <b>{nice(x[name])}</b>
+            <span>{num(x[count])}</span>
           </div>
-        ))}
+
+          <div className="track">
+            <div
+              className="fill"
+              style={{
+                width: `${(n(x[count]) / max) * 100}%`,
+              }}
+            />
+          </div>
+
+          <div className="barMeta">
+            <span>{moneyLabel}</span>
+            <b>{money(x[moneyKey])}</b>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
-/* -------------------------------------------------------
-   Recovery Action Center
-------------------------------------------------------- */
+/* =========================================================
+   RECOVERY MODAL
+========================================================= */
 
 function RecoveryModal({
   opportunity,
   onClose,
+  onExecuted,
 }) {
-  const [details, setDetails] =
-    useState(null);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const [executing, setExecuting] =
-    useState(false);
-
-  const [result, setResult] =
-    useState(null);
-
-  const [modalError, setModalError] =
-    useState("");
+  const [details, setDetails] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [executing, setExecuting] = useState(false);
+  const [result, setResult] = useState(null);
+  const [modalError, setModalError] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -266,6 +252,7 @@ function RecoveryModal({
     setLoading(true);
     setModalError("");
     setResult(null);
+    setDetails(null);
 
     getRecoveryDetails(
       opportunity.transaction_id
@@ -278,7 +265,8 @@ function RecoveryModal({
       .catch((error) => {
         if (active) {
           setModalError(
-            error.message
+            error.message ||
+              "Unable to load recovery details."
           );
         }
       })
@@ -294,6 +282,10 @@ function RecoveryModal({
   }, [opportunity]);
 
   async function handleExecute() {
+    if (!opportunity?.transaction_id) {
+      return;
+    }
+
     setExecuting(true);
     setModalError("");
     setResult(null);
@@ -305,22 +297,138 @@ function RecoveryModal({
         );
 
       setResult(response);
+
+      if (onExecuted) {
+        await onExecuted(
+          opportunity.transaction_id
+        );
+      }
+
+      /* Refresh modal details so status stays correct */
+      const updatedDetails =
+        await getRecoveryDetails(
+          opportunity.transaction_id
+        );
+
+      setDetails(updatedDetails);
+
     } catch (error) {
       setModalError(
-        error.message
+        error.message ||
+          "Recovery execution failed."
       );
     } finally {
       setExecuting(false);
     }
   }
 
+  const alreadyExecuted =
+    String(
+      details?.recovery_status ||
+        opportunity?.recovery_status ||
+        ""
+    ).toUpperCase() === "EXECUTED";
+
+  function getDecisionExplanation() {
+    if (!details) {
+      return {
+        headline: "Analyzing payment...",
+        points: [],
+      };
+    }
+
+    const probability =
+      Number(
+        details.recovery_probability || 0
+      );
+
+    const action =
+      String(
+        details.recommended_action || ""
+      ).toLowerCase();
+
+    const failureCategory =
+      nice(
+        details.failure_category || ""
+      );
+
+    const failureReason =
+      nice(
+        details.failure_reason || ""
+      );
+
+    const paymentMethod =
+      nice(
+        details.payment_method || ""
+      );
+
+    const points = [];
+
+    if (probability >= 0.7) {
+      points.push(
+        "High recovery probability indicates a strong opportunity to attempt recovery."
+      );
+    } else if (probability >= 0.5) {
+      points.push(
+        "Moderate recovery probability suggests the payment is worth attempting to recover."
+      );
+    } else {
+      points.push(
+        "Lower recovery probability means the action should be handled with greater caution."
+      );
+    }
+
+    if (failureCategory) {
+      points.push(
+        `Failure category: ${failureCategory}.`
+      );
+    }
+
+    if (failureReason) {
+      points.push(
+        `Detected failure reason: ${failureReason}.`
+      );
+    }
+
+    if (paymentMethod) {
+      points.push(
+        `Original payment method: ${paymentMethod}.`
+      );
+    }
+
+    if (action.includes("another payment")) {
+      points.push(
+        "A different payment method is recommended to avoid repeating the same payment-path failure."
+      );
+    } else if (action.includes("add funds")) {
+      points.push(
+        "The customer is prompted to add funds before another payment attempt."
+      );
+    } else if (action.includes("retry")) {
+      points.push(
+        "A retry is recommended because the payment remains a recoverable opportunity."
+      );
+    }
+
+    return {
+      headline:
+        probability >= 0.7
+          ? "Strong recovery opportunity"
+          : probability >= 0.5
+          ? "Moderate recovery opportunity"
+          : "Cautious recovery opportunity",
+      points,
+    };
+  }
+
+  const decision =
+    getDecisionExplanation();
+
   return (
     <div
       className="modalBackdrop"
       onMouseDown={(e) => {
-        if (
-          e.target === e.currentTarget
-        ) {
+        if (e.target === e.currentTarget) {
           onClose();
         }
       }}
@@ -339,8 +447,7 @@ function RecoveryModal({
 
             <small>
               Customer{" "}
-              {opportunity.customer_id ||
-                "—"}
+              {opportunity.customer_id || "—"}
             </small>
           </div>
 
@@ -363,6 +470,7 @@ function RecoveryModal({
         ) : details ? (
           <>
             <div className="recoveryHero">
+
               <div>
                 <span>
                   PAYMENT AMOUNT
@@ -396,6 +504,7 @@ function RecoveryModal({
                   )}
                 </strong>
               </div>
+
             </div>
 
             <div className="detailGrid">
@@ -446,6 +555,7 @@ function RecoveryModal({
             </div>
 
             <div className="recommendedBox">
+
               <span>
                 AI RECOMMENDATION
               </span>
@@ -455,26 +565,92 @@ function RecoveryModal({
               </strong>
 
               <p>
-                RevenueOS selected this
-                recovery action based on
-                the payment's recovery
-                probability and failure
-                characteristics.
+                RevenueOS evaluates the
+                recovery probability and
+                payment failure context to
+                determine the recommended
+                recovery action.
               </p>
+
             </div>
 
-            {!result ? (
+            <div className="decisionBox">
+
+              <div className="decisionHeader">
+                <div>
+                  <span>
+                    AI DECISION EXPLANATION
+                  </span>
+
+                  <strong>
+                    {decision.headline}
+                  </strong>
+                </div>
+
+                <div className="confidenceBadge">
+                  {pct(
+                    details.recovery_probability
+                  )}
+
+                  <small>
+                    confidence
+                  </small>
+                </div>
+              </div>
+
+              <div className="decisionPoints">
+
+                {decision.points.map(
+                  (point, index) => (
+                    <div
+                      className="decisionPoint"
+                      key={index}
+                    >
+                      <span>✓</span>
+                      <p>{point}</p>
+                    </div>
+                  )
+                )}
+
+              </div>
+
+            </div>
+
+            {!result &&
+            !alreadyExecuted ? (
               <button
                 className="executeButton"
-                onClick={
-                  handleExecute
-                }
+                onClick={handleExecute}
                 disabled={executing}
               >
                 {executing
                   ? "Executing recovery..."
                   : "⚡ Execute Recovery"}
               </button>
+            ) : alreadyExecuted ? (
+              <div className="resultBox">
+
+                <div className="resultIcon">
+                  ✓
+                </div>
+
+                <div>
+                  <strong>
+                    Recovery already executed
+                  </strong>
+
+                  <p>
+                    This recovery opportunity
+                    has already been processed.
+                  </p>
+
+                  <small>
+                    Action:{" "}
+                    {details.recommended_action}
+                  </small>
+                </div>
+
+              </div>
             ) : (
               <div className="resultBox">
 
@@ -491,17 +667,20 @@ function RecoveryModal({
                   </strong>
 
                   <p>
-                    {result.message}
+                    {result.message ||
+                      "Recovery action executed and recorded successfully."}
                   </p>
 
                   <small>
                     Action:{" "}
-                    {result.action}
+                    {result.action ||
+                      details.recommended_action}
                   </small>
                 </div>
 
               </div>
             )}
+
           </>
         ) : null}
 
@@ -510,14 +689,18 @@ function RecoveryModal({
   );
 }
 
-/* -------------------------------------------------------
-   Opportunity Table
-------------------------------------------------------- */
+/* =========================================================
+   OPPORTUNITY TABLE
+========================================================= */
 
 function OpportunityTable({
   rows,
   onPriority,
   onView,
+  onExecute,
+  onReset,
+  executingId,
+  resettingId,
 }) {
   return (
     <section className="card">
@@ -530,135 +713,186 @@ function OpportunityTable({
 
       {!rows.length ? (
         <div className="empty">
-          No recovery opportunities
-          available.
+          No recovery opportunities available.
         </div>
       ) : (
         <div className="tableWrap">
 
           <table>
-
             <thead>
               <tr>
-                <th>
-                  TRANSACTION
-                </th>
-
+                <th>TRANSACTION</th>
                 <th>METHOD</th>
                 <th>AMOUNT</th>
-                <th>
-                  RECOVERY PROB.
-                </th>
+                <th>RECOVERY PROB.</th>
                 <th>PRIORITY</th>
                 <th>ACTION</th>
-                <th>
-                  EXPECTED RECOVERY
-                </th>
+                <th>EXPECTED RECOVERY</th>
                 <th>MANAGE</th>
               </tr>
             </thead>
 
             <tbody>
 
-              {rows.map((x, i) => (
-                <tr
-                  key={
-                    x.transaction_id ||
-                    i
-                  }
-                >
+              {rows.map((x, i) => {
 
-                  <td>
-                    <b>
-                      {x.transaction_id ||
-                        "—"}
-                    </b>
+                const transactionId =
+                  x.transaction_id;
 
-                    <small>
-                      {x.customer_id ||
-                        "—"}
-                    </small>
-                  </td>
+                const isExecuting =
+                  executingId ===
+                  transactionId;
 
-                  <td>
-                    <span className="method">
-                      {x.payment_method ||
-                        "—"}
-                    </span>
-                  </td>
+                const isResetting =
+                  resettingId ===
+                  transactionId;
 
-                  <td>
-                    {money(x.amount)}
-                  </td>
+                const isExecuted =
+                  String(
+                    x.recovery_status || ""
+                  ).toUpperCase() ===
+                  "EXECUTED";
 
-                  <td>
-                    <div className="prob">
+                return (
+                  <tr
+                    key={
+                      transactionId || i
+                    }
+                  >
 
-                      <div className="probTrack">
-                        <div
-                          className="probFill"
-                          style={{
-                            width: `${Math.min(
-                              n(
-                                x.recovery_probability
-                              ) * 100,
-                              100
-                            )}%`,
-                          }}
-                        />
+                    <td>
+                      <b>
+                        {transactionId || "—"}
+                      </b>
+
+                      <small>
+                        {x.customer_id || "—"}
+                      </small>
+                    </td>
+
+                    <td>
+                      <span className="method">
+                        {x.payment_method || "—"}
+                      </span>
+                    </td>
+
+                    <td>
+                      {money(x.amount)}
+                    </td>
+
+                    <td>
+                      <div className="prob">
+
+                        <div className="probTrack">
+                          <div
+                            className="probFill"
+                            style={{
+                              width: `${Math.min(
+                                n(
+                                  x.recovery_probability
+                                ) * 100,
+                                100
+                              )}%`,
+                            }}
+                          />
+                        </div>
+
+                        {pct(
+                          x.recovery_probability
+                        )}
+
                       </div>
+                    </td>
 
-                      {pct(
-                        x.recovery_probability
-                      )}
+                    <td>
+                      <button
+                        className="plain"
+                        onClick={() =>
+                          onPriority?.(
+                            x.priority
+                          )
+                        }
+                      >
+                        <Badge
+                          p={x.priority}
+                        />
+                      </button>
+                    </td>
 
-                    </div>
-                  </td>
+                    <td>
+                      {x.recommended_action ||
+                        "Retry payment"}
+                    </td>
 
-                  <td>
-                    <button
-                      className="plain"
-                      onClick={() =>
-                        onPriority?.(
-                          x.priority
-                        )
-                      }
-                    >
-                      <Badge
-                        p={x.priority}
-                      />
-                    </button>
-                  </td>
+                    <td>
+                      <b className="green">
+                        {money(
+                          x.expected_recovery_value
+                        )}
+                      </b>
+                    </td>
 
-                  <td>
-                    {x.recommended_action ||
-                      "Retry payment"}
-                  </td>
+                    <td>
+                      <div className="manageButtons">
 
-                  <td>
-                    <b className="green">
-                      {money(
-                        x.expected_recovery_value
-                      )}
-                    </b>
-                  </td>
+                        <button
+                          className="viewButton"
+                          onClick={() =>
+                            onView?.(x)
+                          }
+                        >
+                          View
+                        </button>
 
-                  <td>
-                    <button
-                      className="viewButton"
-                      onClick={() =>
-                        onView?.(x)
-                      }
-                    >
-                      View
-                    </button>
-                  </td>
+                        {!isExecuted ? (
 
-                </tr>
-              ))}
+                          <button
+                            className="executeButton"
+                            disabled={
+                              isExecuting ||
+                              isResetting ||
+                              !transactionId
+                            }
+                            onClick={() =>
+                              onExecute?.(
+                                transactionId
+                              )
+                            }
+                          >
+                            {isExecuting
+                              ? "Executing..."
+                              : "Execute"}
+                          </button>
+
+                        ) : (
+
+                          <button
+                            className="resetButton"
+                            disabled={
+                              isResetting ||
+                              !transactionId
+                            }
+                            onClick={() =>
+                              onReset?.(
+                                transactionId
+                              )
+                            }
+                          >
+                            {isResetting
+                              ? "Resetting..."
+                              : "↻ Reset"}
+                          </button>
+
+                        )}
+
+                      </div>
+                    </td>
+
+                  </tr>
+                );
+              })}
 
             </tbody>
-
           </table>
 
         </div>
@@ -668,9 +902,9 @@ function OpportunityTable({
   );
 }
 
-/* -------------------------------------------------------
-   Generic Data Table
-------------------------------------------------------- */
+/* =========================================================
+   GENERIC DATA TABLE
+========================================================= */
 
 function DataTable({
   title,
@@ -683,9 +917,7 @@ function DataTable({
       <Header
         eyebrow="DATA"
         title={title}
-        tag={`${num(
-          rows.length
-        )} SHOWN`}
+        tag={`${num(rows.length)} SHOWN`}
       />
 
       {!rows.length ? (
@@ -696,7 +928,6 @@ function DataTable({
         <div className="tableWrap">
 
           <table>
-
             <thead>
               <tr>
                 {headers.map((h) => (
@@ -723,23 +954,18 @@ function DataTable({
                     {headers.map((h) => (
                       <td key={h}>
 
-                        {h.includes(
-                          "amount"
-                        ) ||
-                        h.includes(
-                          "risk"
-                        ) ||
-                        (h.includes(
-                          "recovery"
-                        ) &&
+                        {h.includes("amount") ||
+                        h.includes("risk") ||
+                        (
+                          h.includes("recovery") &&
                           h !==
-                            "average_recovery_probability")
+                            "average_recovery_probability"
+                        )
                           ? money(r[h])
                           : h ===
                             "average_recovery_probability"
                           ? pct(r[h])
-                          : h ===
-                            "status"
+                          : h === "status"
                           ? (
                             <span
                               className={`status ${String(
@@ -760,7 +986,6 @@ function DataTable({
                 ))}
 
             </tbody>
-
           </table>
 
         </div>
@@ -770,150 +995,444 @@ function DataTable({
   );
 }
 
-/* -------------------------------------------------------
-   Main App
-------------------------------------------------------- */
+/* =========================================================
+   MAIN APP
+========================================================= */
 
 export default function App() {
+  const [loggedIn, setLoggedIn] = useState(false);
 
-  const [
-    page,
-    setPage,
-  ] = useState("Overview");
+const handleLogin = () => {
+  setLoggedIn(true);
+};
 
-  const [
-    d,
-    setD,
-  ] = useState(EMPTY);
+const handleLogout = () => {
+  localStorage.removeItem("revenueos_token");
+  localStorage.removeItem("revenueos_user");
+  setLoggedIn(false);
+};
+  const [page, setPage] =
+    useState("Overview");
 
-  const [
-    rows,
-    setRows,
-  ] = useState([]);
+  const [d, setD] =
+    useState(EMPTY);
 
-  const [
-    payments,
-    setPayments,
-  ] = useState([]);
+  const [rows, setRows] =
+    useState([]);
 
-  const [
-    customers,
-    setCustomers,
-  ] = useState([]);
+  const [recoveryHistory, setRecoveryHistory] =
+    useState([]);
 
-  const [
-    methods,
-    setMethods,
-  ] = useState([]);
+  const [payments, setPayments] =
+    useState([]);
 
-  const [
-    failures,
-    setFailures,
-  ] = useState([]);
+  const [customers, setCustomers] =
+    useState([]);
 
-  const [
-    analytics,
-    setAnalytics,
-  ] = useState(null);
+  const [methods, setMethods] =
+    useState([]);
 
-  const [
-    filter,
-    setFilter,
-  ] = useState("");
+  const [failures, setFailures] =
+    useState([]);
 
-  const [
-    loading,
-    setLoading,
-  ] = useState(true);
+  const [analytics, setAnalytics] =
+    useState(null);
 
-  const [
-    refreshing,
-    setRefreshing,
-  ] = useState(false);
+  const [filter, setFilter] =
+    useState("");
 
-  const [
-    error,
-    setError,
-  ] = useState("");
+  const [search, setSearch] =
+    useState("");
+
+  const [status, setStatus] =
+    useState("");
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [refreshing, setRefreshing] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
+  const [executingId, setExecutingId] =
+    useState(null);
+
+  const [resettingId, setResettingId] =
+    useState(null);
 
   const [
     selectedOpportunity,
     setSelectedOpportunity,
   ] = useState(null);
 
-  const load =
-    useCallback(
-      async (refresh = false) => {
+  /* =======================================================
+     LOAD ALL DATA
+  ======================================================= */
 
-        if (refresh) {
-          setRefreshing(true);
-        }
+  const load = useCallback(
+    async (refresh = false) => {
 
-        try {
+      if (refresh) {
+        setRefreshing(true);
+      }
 
-          const [
-            a,
-            b,
-            c,
-            e,
-            f,
-            g,
-            h,
-          ] = await Promise.all([
-            getDashboardSummary(),
-            getRecoveryOpportunities(
-              "",
-              100
-            ),
-            getPayments("", 100),
-            getCustomers(100),
-            getPaymentMethodAnalytics(),
-            getFailureCategoryAnalytics(),
-            getAnalyticsOverview(),
-          ]);
+      try {
 
-          setD(normalize(a));
-          setRows(b);
-          setPayments(c);
-          setCustomers(e);
-          setMethods(
-            Array.isArray(f)
-              ? f
-              : []
-          );
-          setFailures(
-            Array.isArray(g)
-              ? g
-              : []
-          );
-          setAnalytics(h);
-          setError("");
+        const [
+          dashboardData,
+          recoveryData,
+          paymentData,
+          customerData,
+          methodData,
+          failureData,
+          analyticsData,
+          historyData,
+        ] = await Promise.all([
 
-        } catch (x) {
+          getDashboardSummary(),
 
-          console.error(x);
+          getRecoveryOpportunities(
+            "",
+            100,
+            "",
+            ""
+          ),
 
-          setError(
-            x.message ||
-              "Backend connection failed"
-          );
+          getPayments("", 100),
 
-        } finally {
+          getCustomers(100),
 
-          setLoading(false);
-          setRefreshing(false);
+          getPaymentMethodAnalytics(),
 
-        }
+          getFailureCategoryAnalytics(),
 
-      },
-      []
-    );
+          getAnalyticsOverview(),
+
+          getRecoveryHistory(),
+
+        ]);
+
+        setD(
+          normalize(dashboardData)
+        );
+
+        setRows(
+          Array.isArray(recoveryData)
+            ? recoveryData
+            : []
+        );
+
+        setPayments(
+          Array.isArray(paymentData)
+            ? paymentData
+            : []
+        );
+
+        setCustomers(
+          Array.isArray(customerData)
+            ? customerData
+            : []
+        );
+
+        setMethods(
+          Array.isArray(methodData)
+            ? methodData
+            : []
+        );
+
+        setFailures(
+          Array.isArray(failureData)
+            ? failureData
+            : []
+        );
+
+        setAnalytics(
+          analyticsData
+        );
+
+        setRecoveryHistory(
+          Array.isArray(historyData)
+            ? historyData
+            : Array.isArray(historyData?.data)
+            ? historyData.data
+            : []
+        );
+
+        setError("");
+
+      } catch (x) {
+
+        console.error(
+          "Dashboard load failed:",
+          x
+        );
+
+        setError(
+          x.message ||
+            "Backend connection failed"
+        );
+
+      } finally {
+
+        setLoading(false);
+        setRefreshing(false);
+
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-
     load(false);
-
   }, [load]);
+
+  /* =======================================================
+     RECOVERY FILTER
+  ======================================================= */
+
+  const filterRows = async (
+    p = filter,
+    searchText = search,
+    statusValue = status
+  ) => {
+
+    const newPriority = p || "";
+    const newSearch = searchText || "";
+    const newStatus = statusValue || "";
+
+    setFilter(newPriority);
+    setSearch(newSearch);
+    setStatus(newStatus);
+
+    try {
+
+      const data =
+        await getRecoveryOpportunities(
+          newPriority,
+          100,
+          newSearch,
+          newStatus
+        );
+
+      setRows(
+        Array.isArray(data)
+          ? data
+          : []
+      );
+
+      setPage("Recovery");
+
+    } catch (x) {
+
+      console.error(
+        "Failed to load recovery opportunities:",
+        x
+      );
+
+      setRows([]);
+
+      setError(
+        x.message ||
+          "Failed to load recovery opportunities."
+      );
+    }
+  };
+
+  /* =======================================================
+     REFRESH RECOVERY DATA
+  ======================================================= */
+
+  const refreshRecoveryData =
+    async () => {
+
+      const [
+        updatedRows,
+        dashboard,
+        updatedMethods,
+        updatedFailures,
+        updatedAnalytics,
+        history,
+      ] = await Promise.all([
+
+        getRecoveryOpportunities(
+          filter,
+          100,
+          search,
+          status
+        ),
+
+        getDashboardSummary(),
+
+        getPaymentMethodAnalytics(),
+
+        getFailureCategoryAnalytics(),
+
+        getAnalyticsOverview(),
+
+        getRecoveryHistory(),
+
+      ]);
+
+      setRows(
+        Array.isArray(updatedRows)
+          ? updatedRows
+          : []
+      );
+
+      setD(
+        normalize(dashboard)
+      );
+
+      setMethods(
+        Array.isArray(updatedMethods)
+          ? updatedMethods
+          : []
+      );
+
+      setFailures(
+        Array.isArray(updatedFailures)
+          ? updatedFailures
+          : []
+      );
+
+      setAnalytics(
+        updatedAnalytics
+      );
+
+      setRecoveryHistory(
+        Array.isArray(history)
+          ? history
+          : Array.isArray(history?.data)
+          ? history.data
+          : []
+      );
+    };
+
+  /* =======================================================
+     EXECUTE RECOVERY FROM TABLE
+  ======================================================= */
+
+  const handleExecuteRecovery =
+    async (transactionId) => {
+
+      if (!transactionId) {
+        return;
+      }
+
+      setExecutingId(
+        transactionId
+      );
+
+      try {
+
+        await executeRecovery(
+          transactionId
+        );
+
+        await refreshRecoveryData();
+
+        setError("");
+
+      } catch (err) {
+
+        console.error(
+          "Recovery execution error:",
+          err
+        );
+
+        setError(
+          err.message ||
+            "Recovery execution failed."
+        );
+
+      } finally {
+
+        setExecutingId(null);
+
+      }
+    };
+
+  /* =======================================================
+     RESET RECOVERY TO PENDING
+  ======================================================= */
+
+  const handleResetRecovery =
+    async (transactionId) => {
+
+      if (!transactionId) {
+        return;
+      }
+
+      setResettingId(
+        transactionId
+      );
+
+      try {
+
+        await resetRecovery(
+          transactionId
+        );
+
+        await refreshRecoveryData();
+
+        setError("");
+
+      } catch (err) {
+
+        console.error(
+          "Recovery reset error:",
+          err
+        );
+
+        setError(
+          err.message ||
+            "Failed to reset recovery."
+        );
+
+      } finally {
+
+        setResettingId(null);
+
+      }
+    };
+
+  /* =======================================================
+     AFTER MODAL EXECUTION
+  ======================================================= */
+
+  const handleModalExecuted =
+    async (transactionId) => {
+
+      try {
+
+        await refreshRecoveryData();
+
+        console.log(
+          "Recovery completed and data refreshed:",
+          transactionId
+        );
+
+        setError("");
+
+      } catch (err) {
+
+        console.error(
+          "Refresh after recovery failed:",
+          err
+        );
+
+        setError(
+          err.message ||
+            "Recovery completed, but refresh failed."
+        );
+      }
+    };
+
+  /* =======================================================
+     CALCULATIONS
+  ======================================================= */
 
   const priority =
     d.priority_distribution;
@@ -922,29 +1441,6 @@ export default function App() {
     priority.HIGH +
     priority.MEDIUM +
     priority.LOW;
-
-  const filterRows =
-    async (p) => {
-
-      setFilter(p || "");
-
-      try {
-
-        setRows(
-          await getRecoveryOpportunities(
-            p || "",
-            100
-          )
-        );
-
-        setPage("Recovery");
-
-      } catch (x) {
-
-        setError(x.message);
-
-      }
-    };
 
   const sortedMethods =
     useMemo(
@@ -967,28 +1463,41 @@ export default function App() {
         ),
       [failures]
     );
+if (!loggedIn) {
+  return <Login onLogin={handleLogin} />;
+}
+  /* =======================================================
+     LOADING
+  ======================================================= */
 
   if (loading) {
     return (
       <div className="loading">
+
         <div className="logo">
           R
         </div>
 
-        <h1>RevenueOS</h1>
+        <h1>
+          RevenueOS
+        </h1>
 
         <p>
           Loading recovery
           intelligence...
         </p>
+
       </div>
     );
   }
 
+  /* =======================================================
+     ERROR
+  ======================================================= */
+
   if (
     error &&
-    !d.payment_metrics
-      .total_transactions
+    !d.payment_metrics.total_transactions
   ) {
     return (
       <div className="loading">
@@ -1004,7 +1513,9 @@ export default function App() {
             connect
           </h1>
 
-          <p>{error}</p>
+          <p>
+            {error}
+          </p>
 
           <button
             onClick={() =>
@@ -1025,8 +1536,14 @@ export default function App() {
     );
   }
 
+  /* =======================================================
+     APP
+  ======================================================= */
+
   return (
     <div className="shell">
+
+      {/* SIDEBAR */}
 
       <aside className="side">
 
@@ -1037,7 +1554,9 @@ export default function App() {
           </div>
 
           <div>
-            <b>RevenueOS</b>
+            <b>
+              RevenueOS
+            </b>
 
             <span>
               Recovery Intelligence
@@ -1051,6 +1570,7 @@ export default function App() {
         </div>
 
         {NAV.map(([x, ic]) => (
+
           <button
             key={x}
             className={`nav ${
@@ -1065,9 +1585,10 @@ export default function App() {
             <i>{ic}</i>
             {x}
           </button>
+
         ))}
 
-        <div className="grow" />
+        
 
         <div className="ai">
 
@@ -1081,7 +1602,7 @@ export default function App() {
           </p>
 
           <div>
-            ROC-AUC{" "}
+            ROC-AUC
             <strong>
               0.7155
             </strong>
@@ -1090,19 +1611,26 @@ export default function App() {
         </div>
 
         <button
-          className="settings"
-          onClick={() =>
-            setPage("Settings")
-          }
-        >
-          ⚙ Settings
-        </button>
+  className="settings"
+  onClick={() => setPage("Settings")}
+>
+  ⚙ Settings
+</button>
 
-        <small className="version">
-          RevenueOS v1.0
-        </small>
+<button
+  className="settings"
+  onClick={handleLogout}
+>
+  ↪ Sign Out
+</button>
+
+<small className="version">
+  RevenueOS v1.0
+</small>
 
       </aside>
+
+      {/* MAIN */}
 
       <main className="main">
 
@@ -1115,7 +1643,9 @@ export default function App() {
               PLATFORM
             </div>
 
-            <h1>{page}</h1>
+            <h1>
+              {page}
+            </h1>
 
             <p>
               Monitor failed payments
@@ -1146,7 +1676,9 @@ export default function App() {
           </div>
         )}
 
-        {/* OVERVIEW */}
+        {/* =================================================
+            OVERVIEW
+        ================================================= */}
 
         {page === "Overview" && (
           <>
@@ -1226,9 +1758,7 @@ export default function App() {
 
                     const pc =
                       total
-                        ? (v /
-                            total) *
-                          100
+                        ? (v / total) * 100
                         : 0;
 
                     return (
@@ -1236,7 +1766,11 @@ export default function App() {
                         className="priority"
                         key={x}
                         onClick={() =>
-                          filterRows(x)
+                          filterRows(
+                            x,
+                            "",
+                            ""
+                          )
                         }
                       >
 
@@ -1281,10 +1815,15 @@ export default function App() {
                 <div className="miniGrid">
 
                   {P.map((x) => (
+
                     <button
                       key={x}
                       onClick={() =>
-                        filterRows(x)
+                        filterRows(
+                          x,
+                          "",
+                          ""
+                        )
                       }
                     >
 
@@ -1301,6 +1840,7 @@ export default function App() {
                       </b>
 
                     </button>
+
                   ))}
 
                 </div>
@@ -1354,13 +1894,8 @@ export default function App() {
                   >
 
                     <div>
-                      <b>
-                        {num(total)}
-                      </b>
-
-                      <small>
-                        cases
-                      </small>
+                      <b>{num(total)}</b>
+                      <small>cases</small>
                     </div>
 
                   </div>
@@ -1368,10 +1903,15 @@ export default function App() {
                   <div className="legend">
 
                     {P.map((x) => (
+
                       <button
                         key={x}
                         onClick={() =>
-                          filterRows(x)
+                          filterRows(
+                            x,
+                            "",
+                            ""
+                          )
                         }
                       >
 
@@ -1390,9 +1930,7 @@ export default function App() {
                           <small>
                             {total
                               ? (
-                                  (priority[
-                                    x
-                                  ] /
+                                  (priority[x] /
                                     total) *
                                   100
                                 ).toFixed(1)
@@ -1409,6 +1947,7 @@ export default function App() {
                         </strong>
 
                       </button>
+
                     ))}
 
                   </div>
@@ -1430,9 +1969,7 @@ export default function App() {
                 />
 
                 <Bars
-                  items={
-                    sortedMethods
-                  }
+                  items={sortedMethods}
                   name="payment_method"
                   count="failed_payments"
                   moneyKey="revenue_at_risk"
@@ -1450,9 +1987,7 @@ export default function App() {
                 />
 
                 <Bars
-                  items={
-                    sortedFailures
-                  }
+                  items={sortedFailures}
                   name="failure_category"
                   count="failed_payments"
                   moneyKey="expected_recovery"
@@ -1465,26 +2000,51 @@ export default function App() {
 
             <OpportunityTable
               rows={
-                d.top_opportunities
-                  .length
-                  ? d.top_opportunities
-                  : rows.slice(0, 10)
+                (
+                  d.top_opportunities.length
+                    ? d.top_opportunities
+                    : rows
+                )
+                  .filter(
+                    (x) =>
+                      String(
+                        x.recovery_status || ""
+                      ).toUpperCase() !==
+                      "EXECUTED"
+                  )
+                  .slice(0, 10)
               }
-              onPriority={filterRows}
+              onPriority={(p) =>
+                filterRows(p, "", "")
+              }
               onView={
                 setSelectedOpportunity
+              }
+              onExecute={
+                handleExecuteRecovery
+              }
+              onReset={
+                handleResetRecovery
+              }
+              executingId={
+                executingId
+              }
+              resettingId={
+                resettingId
               }
             />
 
           </>
         )}
 
-        {/* RECOVERY */}
+        {/* =================================================
+            RECOVERY
+        ================================================= */}
 
         {page === "Recovery" && (
           <>
 
-            <div className="card">
+            <section className="card">
 
               <Header
                 eyebrow="RECOVERY WORKSPACE"
@@ -1494,24 +2054,52 @@ export default function App() {
                 )} SHOWN`}
               />
 
+              <div className="recoverySearch">
+
+                <input
+                  className="searchInput"
+                  type="text"
+                  placeholder="Search by transaction ID or customer ID"
+                  value={search}
+                  onChange={(e) => {
+
+                    const value =
+                      e.target.value;
+
+                    setSearch(value);
+
+                    filterRows(
+                      filter,
+                      value,
+                      status
+                    );
+
+                  }}
+                />
+
+              </div>
+
               <div className="filters">
 
                 Filter by priority:
 
                 <button
                   className={
-                    !filter
-                      ? "sel"
-                      : ""
+                    !filter ? "sel" : ""
                   }
                   onClick={() =>
-                    filterRows("")
+                    filterRows(
+                      "",
+                      search,
+                      status
+                    )
                   }
                 >
                   ALL
                 </button>
 
                 {P.map((x) => (
+
                   <button
                     className={
                       filter === x
@@ -1520,29 +2108,190 @@ export default function App() {
                     }
                     key={x}
                     onClick={() =>
-                      filterRows(x)
+                      filterRows(
+                        x,
+                        search,
+                        status
+                      )
                     }
                   >
                     {x}
                   </button>
+
                 ))}
+
+              </div>
+
+              <div className="filters">
+
+                Filter by status:
+
+                <button
+                  className={
+                    !status ? "sel" : ""
+                  }
+                  onClick={() =>
+                    filterRows(
+                      filter,
+                      search,
+                      ""
+                    )
+                  }
+                >
+                  ALL
+                </button>
+
+                <button
+                  className={
+                    status === "PENDING"
+                      ? "sel"
+                      : ""
+                  }
+                  onClick={() =>
+                    filterRows(
+                      filter,
+                      search,
+                      "PENDING"
+                    )
+                  }
+                >
+                  PENDING
+                </button>
+
+                <button
+                  className={
+                    status === "EXECUTED"
+                      ? "sel"
+                      : ""
+                  }
+                  onClick={() =>
+                    filterRows(
+                      filter,
+                      search,
+                      "EXECUTED"
+                    )
+                  }
+                >
+                  EXECUTED
+                </button>
 
               </div>
 
               <OpportunityTable
                 rows={rows}
-                onPriority={filterRows}
+                onPriority={(p) =>
+                  filterRows(
+                    p,
+                    search,
+                    status
+                  )
+                }
                 onView={
                   setSelectedOpportunity
                 }
+                onExecute={
+                  handleExecuteRecovery
+                }
+                onReset={
+                  handleResetRecovery
+                }
+                executingId={
+                  executingId
+                }
+                resettingId={
+                  resettingId
+                }
               />
 
-            </div>
+            </section>
+
+            {/* RECOVERY HISTORY */}
+
+            <section className="card">
+
+              <Header
+                eyebrow="AUDIT TRAIL"
+                title="Recovery History"
+                tag="EXECUTED ACTIONS"
+              />
+
+              {recoveryHistory.length === 0 ? (
+                <div className="historyEmpty">
+                  No recovery actions have
+                  been executed yet.
+                </div>
+              ) : (
+                <div className="historyTableWrap">
+
+                  <table className="historyTable">
+
+                    <thead>
+                      <tr>
+                        <th>Transaction</th>
+                        <th>Action</th>
+                        <th>Result</th>
+                        <th>Message</th>
+                        <th>Executed At</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+
+                      {recoveryHistory.map(
+                        (item, index) => (
+
+                          <tr
+                            key={
+                              item.id ||
+                              item.transaction_id ||
+                              index
+                            }
+                          >
+
+                            <td>
+                              {item.transaction_id}
+                            </td>
+
+                            <td>
+                              {item.action}
+                            </td>
+
+                            <td>
+                              {item.result}
+                            </td>
+
+                            <td>
+                              {item.message}
+                            </td>
+
+                            <td>
+                              {item.executed_at
+                                ? new Date(
+                                    item.executed_at
+                                  ).toLocaleString()
+                                : "-"}
+                            </td>
+
+                          </tr>
+
+                        )
+                      )}
+
+                    </tbody>
+
+                  </table>
+
+                </div>
+              )}
+
+            </section>
 
           </>
         )}
 
-        {/* PAYMENTS */}
+        {/* =================================================
+            PAYMENTS
+        ================================================= */}
 
         {page === "Payments" && (
           <>
@@ -1615,7 +2364,9 @@ export default function App() {
           </>
         )}
 
-        {/* CUSTOMERS */}
+        {/* =================================================
+            CUSTOMERS
+        ================================================= */}
 
         {page === "Customers" && (
           <DataTable
@@ -1631,7 +2382,9 @@ export default function App() {
           />
         )}
 
-        {/* ANALYTICS */}
+        {/* =================================================
+            ANALYTICS
+        ================================================= */}
 
         {page === "Analytics" && (
           <>
@@ -1691,9 +2444,7 @@ export default function App() {
                 />
 
                 <Bars
-                  items={
-                    sortedMethods
-                  }
+                  items={sortedMethods}
                   name="payment_method"
                   count="failed_payments"
                   moneyKey="revenue_at_risk"
@@ -1710,9 +2461,7 @@ export default function App() {
                 />
 
                 <Bars
-                  items={
-                    sortedFailures
-                  }
+                  items={sortedFailures}
                   name="failure_category"
                   count="failed_payments"
                   moneyKey="expected_recovery"
@@ -1726,91 +2475,142 @@ export default function App() {
           </>
         )}
 
-        {/* SETTINGS */}
+        {/* =================================================
+            SETTINGS
+        ================================================= */}
 
         {page === "Settings" && (
-          <section className="card">
+  <section className="page">
+    <div className="pageHeader">
+      <div>
+        <h1>Settings</h1>
+        <p>Manage your RevenueOS platform preferences</p>
+      </div>
+    </div>
 
-            <Header
-              eyebrow="SYSTEM"
-              title="RevenueOS settings"
-            />
+    <div className="settingsGrid">
 
-            <div className="settingsGrid">
+      {/* Account */}
+      <div className="settingsCard">
+        <h3>👤 Account</h3>
+        <p className="settingsDescription">
+          Current administrator account
+        </p>
 
-              <div>
-                <span>
-                  Backend API
-                </span>
+        <div className="settingRow">
+          <div>
+            <strong>
+              {JSON.parse(
+                localStorage.getItem("revenueos_user") || "{}"
+              ).email || "admin@revenueos.com"}
+            </strong>
+            <span>Administrator</span>
+          </div>
+        </div>
+      </div>
 
-                <b>
-                  http://127.0.0.1:8000
-                </b>
+      {/* AI Engine */}
+      <div className="settingsCard">
+        <h3>🤖 AI Recovery Engine</h3>
+        <p className="settingsDescription">
+          Recovery prediction model configuration
+        </p>
 
-                <small>
-                  FastAPI
-                </small>
-              </div>
+        <div className="settingRow">
+          <div>
+            <strong>Recovery Model</strong>
+            <span>Active</span>
+          </div>
 
-              <div>
-                <span>
-                  Recovery model
-                </span>
+          <span className="statusBadge success">
+            ● Online
+          </span>
+        </div>
 
-                <b>Active</b>
+        <div className="settingRow">
+          <div>
+            <strong>ROC-AUC</strong>
+            <span>Model performance</span>
+          </div>
 
-                <small>
-                  ROC-AUC 0.7155
-                </small>
-              </div>
+          <strong>0.7155</strong>
+        </div>
+      </div>
 
-              <div>
-                <span>
-                  Data source
-                </span>
+      {/* Notifications */}
+      <div className="settingsCard">
+        <h3>🔔 Notifications</h3>
+        <p className="settingsDescription">
+          Configure recovery alerts
+        </p>
 
-                <b>
-                  CSV datasets
-                </b>
+        <div className="settingRow">
+          <div>
+            <strong>Recovery Alerts</strong>
+            <span>Notify when high-value opportunities are detected</span>
+          </div>
 
-                <small>
-                  payments.csv +
-                  recovery_recommendations.csv
-                </small>
-              </div>
+          <label className="toggle">
+            <input type="checkbox" defaultChecked />
+            <span className="slider"></span>
+          </label>
+        </div>
+      </div>
 
-              <div>
-                <span>
-                  Frontend
-                </span>
+      {/* Auto Recovery */}
+      <div className="settingsCard">
+        <h3>⚡ Recovery Automation</h3>
+        <p className="settingsDescription">
+          Control automated recovery execution
+        </p>
 
-                <b>
-                  React + Vite
-                </b>
+        <div className="settingRow">
+          <div>
+            <strong>Auto Recovery Mode</strong>
+            <span>
+              Automatically execute eligible recovery actions
+            </span>
+          </div>
 
-                <small>
-                  Connected dashboard
-                </small>
-              </div>
+          <label className="toggle">
+            <input type="checkbox" />
+            <span className="slider"></span>
+          </label>
+        </div>
 
-            </div>
+        <div className="warningBox">
+          ⚠ Automated recovery is disabled by default.
+          Manual approval is required.
+        </div>
+      </div>
 
-          </section>
-        )}
-
+    </div>
+  </section>
+)}
       </main>
 
+      {/* =================================================
+          RECOVERY MODAL
+      ================================================= */}
+
       {selectedOpportunity && (
+
         <RecoveryModal
           opportunity={
             selectedOpportunity
           }
+
           onClose={() =>
             setSelectedOpportunity(
               null
             )
           }
+
+          onExecuted={
+            handleModalExecuted
+          }
         />
+
       )}
 
     </div>
