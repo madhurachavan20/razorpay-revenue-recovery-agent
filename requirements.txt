@@ -8,3 +8,5 @@ pydantic
 python-dotenv
 sqlalchemy
 psycopg2-binary
+PyJWT
+pwdlib[argon2]
