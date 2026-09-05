@@ -1527,7 +1527,7 @@ if (!loggedIn) {
 
           <small>
             Start FastAPI at
-            http://127.0.0.1:8000
+            https://revenueos-api-hymt.onrender.com
           </small>
 
         </div>
