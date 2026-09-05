@@ -25,7 +25,12 @@ ml/models/*.onnx
 # Data
 *.csv
 *.parquet
+# Ignore generated JSON files
 *.json
+
+# But track Node/Vite package files
+!frontend/package.json
+!frontend/package-lock.json
 
 # Node
 node_modules/
