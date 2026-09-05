@@ -1003,13 +1003,9 @@ export default function App() {
  const [loggedIn, setLoggedIn] = useState(() => {
   return Boolean(localStorage.getItem("revenueos_token"));
 });
-console.log(
-  "AUTH CHECK:",
-  localStorage.getItem("revenueos_token"),
-  Boolean(localStorage.getItem("revenueos_token"))
-);
-const handleLogin = (user) => {
-  setLoggedIn(true);
+
+const handleLogin = () => {
+  window.location.reload();
 };
 
 
